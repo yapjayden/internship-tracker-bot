@@ -36,6 +36,9 @@ pip install -r requirements.txt
 cp .env.example .env           # then fill in GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
 python -m scripts.gmail_oauth_setup    # one-time; prints GMAIL_REFRESH_TOKEN
 python -m scripts.test_gmail_watcher   # prints new subjects/senders
+
+python -m scripts.test_router          # classify 10 labelled sample emails
+python -m scripts.test_router --inbox  # classify your real recent mail
 ```
 
 Each credential in `.env` must be on a single line, unquoted — long values
@@ -48,5 +51,5 @@ mail later.
 
 ## Status
 
-Stage 2: Gmail watcher implemented and testable in isolation. Router,
-extractor, research agents, tracker, and Telegram bot are still stubs.
+Stage 3: Gmail watcher and router agent working. Extractor, research agents,
+tracker, and Telegram bot are still stubs.

@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from core import gmail_watcher, state
+from core import gmail_watcher, router_agent, state
 from core.config import load_settings
+from core.models import Category
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,12 +25,25 @@ async def run() -> None:
     emails, next_cursor = await gmail_watcher.fetch_new_emails(settings, cursor)
     logger.info("Fetched %d new email(s)", len(emails))
 
-    for email in emails:
-        # TODO Stage 3: router_agent.classify -> drop not_relevant.
+    # Classification is independent per email, so fan it out rather than
+    # walking the inbox serially. return_exceptions keeps one bad email from
+    # sinking the whole run.
+    routes = await asyncio.gather(
+        *(router_agent.classify(settings, email) for email in emails),
+        return_exceptions=True,
+    )
+
+    for email, route in zip(emails, routes):
+        if isinstance(route, Exception):
+            logger.error("Routing failed for %r: %s", email.subject, route)
+            continue
+        if route.category == Category.NOT_RELEVANT:
+            continue
+
         # TODO Stage 4: extractor_agent.extract for relevant categories.
         # TODO Stage 7/8: fan out research_agent per company, interviews only.
         # TODO Stage 5: tracker.append_row.  Stage 6: notifier.notify_new_item.
-        logger.info("Pending pipeline: %s", email.subject)
+        logger.info("Relevant (%s): %s", route.category.value, email.subject)
 
     # Only advance the cursor after a clean pass, so a mid-run crash re-reads
     # the same messages next time rather than silently skipping them.
