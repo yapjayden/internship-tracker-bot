@@ -15,12 +15,11 @@ from pydantic import BaseModel
 
 class MailSource(str, Enum):
     GMAIL = "gmail"
-    OUTLOOK = "outlook"
 
 
 class Email(BaseModel):
-    """Common shape both gmail_watcher and outlook_watcher must return, so
-    everything downstream is source-agnostic."""
+    """Common shape any mail watcher returns, so everything downstream stays
+    source-agnostic if another mailbox is added later."""
 
     source: MailSource
     message_id: str

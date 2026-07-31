@@ -19,41 +19,37 @@ def _require(name: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    # Gemini
-    gemini_api_key: str
-
     # Gmail OAuth (installed-app flow, refresh token minted once locally)
     gmail_client_id: str
     gmail_client_secret: str
     gmail_refresh_token: str
 
-    # Outlook / Microsoft Graph OAuth (Azure AD app, refresh token minted once locally)
-    outlook_client_id: str
-    outlook_client_secret: str
-    outlook_refresh_token: str
-    outlook_tenant_id: str
+    # Everything below belongs to a later build stage. They default to empty
+    # so earlier stages can be run and tested before those accounts exist —
+    # the module that needs one calls require_setting() at point of use.
+    gemini_api_key: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    google_service_account_json: str = ""
+    tracker_spreadsheet_id: str = ""
 
-    # Telegram
-    telegram_bot_token: str
-    telegram_chat_id: str
 
-    # Google Sheets tracker
-    google_service_account_json: str
-    tracker_spreadsheet_id: str
+def require_setting(value: str, env_name: str) -> str:
+    """Assert a later-stage setting is present, at the point it's actually
+    used rather than at load time."""
+    if not value:
+        raise RuntimeError(f"Missing required env var: {env_name}")
+    return value
 
 
 def load_settings() -> Settings:
     return Settings(
-        gemini_api_key=_require("GEMINI_API_KEY"),
         gmail_client_id=_require("GMAIL_CLIENT_ID"),
         gmail_client_secret=_require("GMAIL_CLIENT_SECRET"),
         gmail_refresh_token=_require("GMAIL_REFRESH_TOKEN"),
-        outlook_client_id=_require("OUTLOOK_CLIENT_ID"),
-        outlook_client_secret=_require("OUTLOOK_CLIENT_SECRET"),
-        outlook_refresh_token=_require("OUTLOOK_REFRESH_TOKEN"),
-        outlook_tenant_id=os.environ.get("OUTLOOK_TENANT_ID", "common"),
-        telegram_bot_token=_require("TELEGRAM_BOT_TOKEN"),
-        telegram_chat_id=_require("TELEGRAM_CHAT_ID"),
-        google_service_account_json=_require("GOOGLE_SERVICE_ACCOUNT_JSON"),
-        tracker_spreadsheet_id=_require("TRACKER_SPREADSHEET_ID"),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
+        tracker_spreadsheet_id=os.environ.get("TRACKER_SPREADSHEET_ID", ""),
     )

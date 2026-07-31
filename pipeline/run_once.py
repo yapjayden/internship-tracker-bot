@@ -8,31 +8,32 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from core import mail_watcher, notifier, router_agent, tracker
+from core import gmail_watcher, state
 from core.config import load_settings
-from core.mail_watcher import MailCursors
-from core.models import Category
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+CURSOR_KEY = "gmail"
 
 
 async def run() -> None:
     settings = load_settings()
 
-    # TODO Stage 2: load persisted cursors instead of starting fresh each run.
-    cursors = MailCursors()
-    emails, cursors = await mail_watcher.fetch_new_emails(settings, cursors)
+    cursor = state.read_cursor(CURSOR_KEY)
+    emails, next_cursor = await gmail_watcher.fetch_new_emails(settings, cursor)
     logger.info("Fetched %d new email(s)", len(emails))
 
     for email in emails:
-        result = await router_agent.classify(settings, email)
-        if result.category == Category.NOT_RELEVANT:
-            continue
-        # TODO Stage 4+: extract, Stage 7/8: fan out research agents for
-        # interviews only, Stage 5: tracker.append_row, Stage 6: notifier.notify_new_item.
+        # TODO Stage 3: router_agent.classify -> drop not_relevant.
+        # TODO Stage 4: extractor_agent.extract for relevant categories.
+        # TODO Stage 7/8: fan out research_agent per company, interviews only.
+        # TODO Stage 5: tracker.append_row.  Stage 6: notifier.notify_new_item.
+        logger.info("Pending pipeline: %s", email.subject)
 
-    # TODO Stage 2: persist `cursors` for next run.
+    # Only advance the cursor after a clean pass, so a mid-run crash re-reads
+    # the same messages next time rather than silently skipping them.
+    state.write_cursor(CURSOR_KEY, next_cursor)
 
 
 if __name__ == "__main__":

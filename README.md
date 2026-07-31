@@ -1,15 +1,15 @@
 # internship-tracker-bot
 
-A Telegram bot that reads Gmail and Outlook, identifies internship-related
-emails (interview invites, OA/assessment invites, results), extracts
-structured details, logs them to a Google Sheets tracker, and notifies you
-on Telegram. New interviews trigger parallel per-company research agents
-that return a prep brief alongside the notification.
+A Telegram bot that reads Gmail, identifies internship-related emails
+(interview invites, OA/assessment invites, results), extracts structured
+details, logs them to a Google Sheets tracker, and notifies you on Telegram.
+New interviews trigger parallel per-company research agents that return a
+prep brief alongside the notification.
 
 ## Architecture
 
-- `core/` — shared library: mail watchers (Gmail + Outlook), router agent,
-  extractor agent, research agent, tracker (Google Sheets), notifier.
+- `core/` — shared library: Gmail watcher, router agent, extractor agent,
+  research agent, tracker (Google Sheets), notifier.
 - `pipeline/run_once.py` — one full pass (watch -> route -> extract ->
   research -> track -> notify), run on a schedule via GitHub Actions.
 - `bot/app.py` — Telegram webhook service (on-demand queries), deployed to
@@ -23,10 +23,18 @@ since neither environment has persistent disk between runs.
 
 ## Setup
 
-Copy `.env.example` to `.env` and fill in credentials. See the project plan
-for the one-time OAuth setup scripts (Gmail, Outlook) needed to mint refresh
-tokens.
+```bash
+pip install -r requirements.txt
+cp .env.example .env          # then fill in GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
+python -m scripts.gmail_oauth_setup    # one-time; prints GMAIL_REFRESH_TOKEN
+python -m scripts.test_gmail_watcher   # prints new subjects/senders
+```
+
+The OAuth step needs a browser, so it runs on your machine, not in CI. The
+refresh token it mints is what lets the headless GitHub Actions job read
+mail later.
 
 ## Status
 
-Stage 1: project scaffolded, module interfaces stubbed. Not yet functional.
+Stage 2: Gmail watcher implemented and testable in isolation. Router,
+extractor, research agents, tracker, and Telegram bot are still stubs.
