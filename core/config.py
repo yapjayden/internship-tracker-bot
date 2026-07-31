@@ -3,15 +3,34 @@ reading os.environ directly, so there's exactly one place that knows how
 config is sourced (a local .env file vs. real env vars in CI/Cloud Run)."""
 
 import os
+import sys
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+if sys.version_info < (3, 11):
+    raise RuntimeError(
+        f"This project needs Python 3.11+, found {sys.version_info.major}."
+        f"{sys.version_info.minor}. macOS ships 3.9 by default; create the venv "
+        "with a newer interpreter (see README)."
+    )
+
 load_dotenv()
 
 
-def _require(name: str) -> str:
+def get_env(name: str, default: str = "") -> str:
+    """Read an env var, tolerating the usual copy-paste damage: surrounding
+    quotes, stray whitespace, and the line breaks that sneak in when a long
+    credential is pasted out of a browser."""
     value = os.environ.get(name)
+    if value is None:
+        return default
+    value = value.strip().strip("\"'").strip()
+    return "".join(value.split())
+
+
+def _require(name: str) -> str:
+    value = get_env(name)
     if not value:
         raise RuntimeError(f"Missing required env var: {name}")
     return value
@@ -47,9 +66,11 @@ def load_settings() -> Settings:
         gmail_client_id=_require("GMAIL_CLIENT_ID"),
         gmail_client_secret=_require("GMAIL_CLIENT_SECRET"),
         gmail_refresh_token=_require("GMAIL_REFRESH_TOKEN"),
-        gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
-        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
-        google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", ""),
-        tracker_spreadsheet_id=os.environ.get("TRACKER_SPREADSHEET_ID", ""),
+        gemini_api_key=get_env("GEMINI_API_KEY"),
+        telegram_bot_token=get_env("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=get_env("TELEGRAM_CHAT_ID"),
+        # Service-account JSON is the one value that legitimately contains
+        # whitespace, so it skips get_env's whitespace stripping.
+        google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip(),
+        tracker_spreadsheet_id=get_env("TRACKER_SPREADSHEET_ID"),
     )

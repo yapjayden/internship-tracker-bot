@@ -23,12 +23,24 @@ since neither environment has persistent disk between runs.
 
 ## Setup
 
+Requires **Python 3.11+**. macOS ships 3.9, which will not work — check with
+`python3 --version` and install a newer one first if needed (`brew install
+python@3.12`).
+
 ```bash
+python3.12 -m venv .venv       # or python3.11 / python3.13
+source .venv/bin/activate
+python --version               # must be 3.11 or newer
 pip install -r requirements.txt
-cp .env.example .env          # then fill in GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
+
+cp .env.example .env           # then fill in GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET
 python -m scripts.gmail_oauth_setup    # one-time; prints GMAIL_REFRESH_TOKEN
 python -m scripts.test_gmail_watcher   # prints new subjects/senders
 ```
+
+Each credential in `.env` must be on a single line, unquoted — long values
+pasted from a browser often wrap, which produces confusing `invalid_client`
+errors during OAuth.
 
 The OAuth step needs a browser, so it runs on your machine, not in CI. The
 refresh token it mints is what lets the headless GitHub Actions job read
