@@ -12,7 +12,7 @@ subjects and classifications only, never bodies.
 import argparse
 import asyncio
 
-from core import gmail_watcher, router_agent, state
+from core import gemini, gmail_watcher, router_agent, state
 from core.config import load_settings
 from tests.sample_emails import SAMPLES
 
@@ -20,8 +20,16 @@ from tests.sample_emails import SAMPLES
 async def run_samples() -> None:
     settings = load_settings()
 
+    rpm = gemini.get_limiter().rpm
+    estimate = max(0, (len(SAMPLES) - rpm)) * 60 // max(rpm, 1)
+    print(
+        f"Classifying {len(SAMPLES)} samples, paced at {rpm} req/min "
+        f"(~{estimate}s). Set GEMINI_RPM in .env if your quota allows more."
+    )
+
     # Classification of one email never depends on another, so these are
-    # safe to run concurrently — and it keeps the test loop quick.
+    # safe to run concurrently; the shared rate limiter paces the actual
+    # API calls so concurrency never becomes a quota burst.
     results = await asyncio.gather(
         *(router_agent.classify(settings, email) for email, _ in SAMPLES),
         return_exceptions=True,
