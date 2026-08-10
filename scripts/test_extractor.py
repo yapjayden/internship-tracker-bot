@@ -110,7 +110,7 @@ async def run_inbox() -> None:
     """Route then extract real mail. No ground truth — this catches formatting
     the synthetic corpus does not have, like quoted reply chains and HTML."""
     settings = load_settings()
-    emails, _ = await gmail_watcher.fetch_new_emails(settings, state.read_cursor("gmail"))
+    emails, _ = await gmail_watcher.fetch_new_emails(settings, await state.read_cursor(settings, "gmail"))
     if not emails:
         print("No new mail since the last cursor. Run test_gmail_watcher --reset first.")
         return

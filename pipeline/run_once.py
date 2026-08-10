@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from core import extractor_agent, gmail_watcher, router_agent, state
+from core import extractor_agent, gmail_watcher, router_agent, state, tracker
 from core.config import load_settings
 from core.models import Category, Email
 
@@ -21,7 +21,11 @@ CURSOR_KEY = "gmail"
 async def run() -> None:
     settings = load_settings()
 
-    cursor = state.read_cursor(CURSOR_KEY)
+    # Creates the tabs and headers on a fresh spreadsheet, so the first run
+    # needs no manual setup beyond sharing the sheet.
+    await tracker.ensure_ready(settings)
+
+    cursor = await state.read_cursor(settings, CURSOR_KEY)
     emails, next_cursor = await gmail_watcher.fetch_new_emails(settings, cursor)
     logger.info("Fetched %d new email(s)", len(emails))
 
@@ -59,16 +63,24 @@ async def run() -> None:
             continue
 
         # TODO Stage 7/8: fan out research_agent per company, interviews only.
-        # TODO Stage 5: tracker.upsert_row.  Stage 6: notifier.notify_new_item.
+        # TODO Stage 6: notifier.notify_new_item.
+        try:
+            # Serialised inside the tracker: concurrent upserts for the same
+            # application would otherwise each append their own row.
+            is_new = await tracker.upsert_row(settings, category, details, email)
+        except Exception as exc:
+            logger.error("Tracker write failed for %r: %s", email.subject, exc)
+            continue
+
         logger.info(
-            "Extracted (%s): %s / %s / %s / key_date=%s",
-            category.value, details.company, details.role,
-            details.status.value, details.key_date,
+            "%s %s / %s / %s / key_date=%s",
+            "Added" if is_new else "Updated",
+            details.company, details.role, details.status.value, details.key_date,
         )
 
     # Only advance the cursor after a clean pass, so a mid-run crash re-reads
     # the same messages next time rather than silently skipping them.
-    state.write_cursor(CURSOR_KEY, next_cursor)
+    await state.write_cursor(settings, CURSOR_KEY, next_cursor)
 
 
 if __name__ == "__main__":

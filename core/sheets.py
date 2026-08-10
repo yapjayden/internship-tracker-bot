@@ -1,0 +1,161 @@
+"""Low-level Google Sheets access, shared by the tracker and the state store.
+
+The google-api-python-client is synchronous, and the rest of the pipeline is
+asyncio, so every call here is pushed to a worker thread. A blocking HTTP call
+on the event loop would stall the concurrent agents running alongside it.
+
+One spreadsheet holds everything: an Applications tab that the user reads, and
+a State tab holding the Gmail cursor. GitHub Actions gives the pipeline no
+persistent disk, so the cursor has to live somewhere durable, and a second tab
+is cheaper than a second service.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
+from core.config import Settings, require_setting
+
+logger = logging.getLogger(__name__)
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+APPLICATIONS_TAB = "Applications"
+STATE_TAB = "State"
+
+_service: Any = None
+
+
+def _build_service(settings: Settings) -> Any:
+    global _service
+    if _service is not None:
+        return _service
+
+    raw = require_setting(
+        settings.google_service_account_json, "GOOGLE_SERVICE_ACCOUNT_JSON"
+    )
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the whole "
+            "service-account key file as a single line, with no surrounding "
+            "quotes and no line breaks."
+        ) from exc
+
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    _service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    return _service
+
+
+def _spreadsheet_id(settings: Settings) -> str:
+    return require_setting(settings.tracker_spreadsheet_id, "TRACKER_SPREADSHEET_ID")
+
+
+async def _run(fn, *args, **kwargs):
+    """Execute a blocking Sheets call off the event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+async def ensure_tabs(settings: Settings, headers: dict[str, list[str]]) -> None:
+    """Create any missing tab and write its header row.
+
+    Called once per run rather than per write. Doing it lazily means a fresh
+    spreadsheet works with no manual setup beyond sharing it with the service
+    account — the failure mode we are avoiding is a first run that dies on a
+    404 for a tab the user was never told to create.
+    """
+    service = _build_service(settings)
+    sheet_id = _spreadsheet_id(settings)
+
+    def _existing() -> set[str]:
+        meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        return {s["properties"]["title"] for s in meta.get("sheets", [])}
+
+    try:
+        existing = await _run(_existing)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot open spreadsheet {sheet_id!r}. Check TRACKER_SPREADSHEET_ID "
+            "is the id from the sheet URL, and that the sheet is shared with "
+            "the service account's client_email as an Editor."
+        ) from exc
+
+    missing = [title for title in headers if title not in existing]
+    if missing:
+        def _add() -> None:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        {"addSheet": {"properties": {"title": title}}}
+                        for title in missing
+                    ]
+                },
+            ).execute()
+
+        await _run(_add)
+        logger.info("Created tab(s): %s", ", ".join(missing))
+
+    # A tab can exist with no header if someone cleared it, so check content
+    # rather than assuming creation and headers happen together.
+    for title, header in headers.items():
+        rows = await get_values(settings, f"{title}!A1:Z1")
+        if not rows or not any(cell.strip() for cell in rows[0]):
+            await update_values(settings, f"{title}!A1", [header])
+            logger.info("Wrote header row for %s", title)
+
+
+async def get_values(settings: Settings, range_: str) -> list[list[str]]:
+    service = _build_service(settings)
+    sheet_id = _spreadsheet_id(settings)
+
+    def _get() -> list[list[str]]:
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=range_)
+            .execute()
+        )
+        return result.get("values", [])
+
+    return await _run(_get)
+
+
+async def update_values(settings: Settings, range_: str, rows: list[list[Any]]) -> None:
+    service = _build_service(settings)
+    sheet_id = _spreadsheet_id(settings)
+
+    def _update() -> None:
+        service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=range_,
+            # RAW, not USER_ENTERED: a role like "-" or a company starting with
+            # "=" would otherwise be parsed as a formula.
+            valueInputOption="RAW",
+            body={"values": rows},
+        ).execute()
+
+    await _run(_update)
+
+
+async def append_values(settings: Settings, tab: str, rows: list[list[Any]]) -> None:
+    service = _build_service(settings)
+    sheet_id = _spreadsheet_id(settings)
+
+    def _append() -> None:
+        service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range=f"{tab}!A1",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    await _run(_append)

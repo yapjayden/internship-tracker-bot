@@ -21,7 +21,7 @@ CURSOR_KEY = "gmail"
 
 async def main(reset: bool) -> None:
     settings = load_settings()
-    cursor = None if reset else state.read_cursor(CURSOR_KEY)
+    cursor = None if reset else await state.read_cursor(settings, CURSOR_KEY)
 
     print(f"Fetching (cursor={cursor or 'none, first run'})...")
     emails, next_cursor = await gmail_watcher.fetch_new_emails(settings, cursor)
@@ -32,7 +32,7 @@ async def main(reset: bool) -> None:
         print(f"      {email.subject}")
         print(f"      ({len(email.body_text)} chars of body parsed)")
 
-    state.write_cursor(CURSOR_KEY, next_cursor)
+    await state.write_cursor(settings, CURSOR_KEY, next_cursor)
     print(f"\nCursor advanced to {next_cursor}")
 
 
