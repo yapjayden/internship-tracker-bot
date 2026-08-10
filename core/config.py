@@ -49,6 +49,11 @@ class Settings:
     gemini_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Two ways to supply the service-account key. The file path is for local
+    # use: a downloaded key is pretty-printed JSON, and .env is a line-based
+    # format, so pasting one in unflattened silently truncates it to "{".
+    # The inline form is for CI, where secrets are strings and there is no file.
+    google_service_account_file: str = ""
     google_service_account_json: str = ""
     tracker_spreadsheet_id: str = ""
 
@@ -69,6 +74,7 @@ def load_settings() -> Settings:
         gemini_api_key=get_env("GEMINI_API_KEY"),
         telegram_bot_token=get_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=get_env("TELEGRAM_CHAT_ID"),
+        google_service_account_file=get_env("GOOGLE_SERVICE_ACCOUNT_FILE"),
         # Service-account JSON is the one value that legitimately contains
         # whitespace, so it skips get_env's whitespace stripping.
         google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip(),

@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+
+# Service-account keys and any other downloaded credentials.
+secrets/
+*service-account*.json

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from google.oauth2.service_account import Credentials
@@ -32,24 +33,61 @@ STATE_TAB = "State"
 _service: Any = None
 
 
+def _load_key(settings: Settings) -> dict:
+    """Read the service-account key from a file path or an inline JSON string.
+
+    The file path is preferred locally. A key downloaded from Google Cloud is
+    pretty-printed across ~12 lines, and .env is line-based, so pasting it in
+    unflattened leaves the variable holding just "{" — which fails later, at
+    the first API call, with a JSON error that says nothing about .env.
+    """
+    path = settings.google_service_account_file
+    if path:
+        key_path = Path(path).expanduser()
+        if not key_path.is_file():
+            raise RuntimeError(
+                f"GOOGLE_SERVICE_ACCOUNT_FILE points to {key_path}, which does "
+                "not exist. Use the path to the .json key you downloaded from "
+                "Google Cloud."
+            )
+        try:
+            return json.loads(key_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"{key_path} is not valid JSON: {exc}") from exc
+
+    raw = require_setting(
+        settings.google_service_account_json,
+        "GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_JSON",
+    )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        # Name the actual mistake. "Invalid JSON" sends people hunting for a
+        # typo in a file that is usually fine; the value simply got truncated.
+        truncated = raw.strip() in {"{", "{{"} or len(raw.strip()) < 40
+        hint = (
+            "The value looks truncated — .env is line-based, so a "
+            "pretty-printed key ends up as just its first line.\n"
+            if truncated
+            else ""
+        )
+        raise RuntimeError(
+            f"GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON (got "
+            f"{raw.strip()[:40]!r}...).\n{hint}"
+            "Easiest fix — point at the file instead, and delete the inline "
+            "variable:\n"
+            "    GOOGLE_SERVICE_ACCOUNT_FILE=/absolute/path/to/key.json\n"
+            "Or flatten it to one line:\n"
+            "    python -c \"import json,sys;print(json.dumps(json.load(open(sys.argv[1]))))\" key.json"
+        ) from exc
+
+
 def _build_service(settings: Settings) -> Any:
     global _service
     if _service is not None:
         return _service
 
-    raw = require_setting(
-        settings.google_service_account_json, "GOOGLE_SERVICE_ACCOUNT_JSON"
-    )
-    try:
-        info = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the whole "
-            "service-account key file as a single line, with no surrounding "
-            "quotes and no line breaks."
-        ) from exc
-
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(_load_key(settings), scopes=SCOPES)
     _service = build("sheets", "v4", credentials=creds, cache_discovery=False)
     return _service
 

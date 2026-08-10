@@ -28,7 +28,10 @@ STATE_PATH = Path(".pipeline_state.json")
 
 
 def _use_sheet(settings: Settings) -> bool:
-    return bool(settings.tracker_spreadsheet_id and settings.google_service_account_json)
+    has_key = bool(
+        settings.google_service_account_file or settings.google_service_account_json
+    )
+    return bool(settings.tracker_spreadsheet_id and has_key)
 
 
 def _read_file(key: str) -> str | None:
