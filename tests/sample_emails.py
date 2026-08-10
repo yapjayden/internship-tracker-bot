@@ -6,9 +6,11 @@ to catch keyword-matching: a newsletter containing "interview", a rejection
 worded warmly, a careers-fair blast that looks like an invitation.
 """
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from typing import Optional
 
-from core.models import Category, Email, MailSource
+from core.models import ApplicationStatus, Category, Email, MailSource
 
 
 def _email(message_id: str, sender: str, subject: str, body: str) -> Email:
@@ -147,3 +149,77 @@ SAMPLES: list[tuple[Email, Category]] = [
         Category.OTHER,
     ),
 ]
+
+
+# --- Extraction expectations (Stage 4) -------------------------------------
+#
+# Keyed by message_id, covering only the samples the router keeps. Matching is
+# deliberately loose: "Sea" and "Sea Group" are both correct, and pinning an
+# exact string would turn a working extractor into a failing test. What is
+# checked strictly is what a wrong answer would actually cost — the employer,
+# the status, and whether a real deadline was found.
+#
+# s2 and s5 are the ones that matter most: both arrive from an intermediary
+# (HackerRank, Greenhouse) while the employer is named only in the body, so a
+# model that reads the sender domain gets them wrong.
+
+@dataclass(frozen=True)
+class ExtractionExpectation:
+    company_any_of: tuple[str, ...]
+    role_contains: str
+    status: ApplicationStatus
+    # None means "the email states no actionable date"; a date means the
+    # extractor should find that day. Time of day is not checked.
+    key_date: Optional[date] = None
+    # Set where the email implies a date without committing to one, so either
+    # answer is defensible.
+    key_date_optional: bool = False
+
+
+EXTRACTION_EXPECTATIONS: dict[str, ExtractionExpectation] = {
+    "s1": ExtractionExpectation(
+        company_any_of=("shopee",),
+        role_contains="software engineer",
+        status=ApplicationStatus.INTERVIEW,
+        key_date=date(2026, 7, 25),
+    ),
+    "s2": ExtractionExpectation(
+        # Sent by HackerRank; the employer is GovTech.
+        company_any_of=("govtech",),
+        role_contains="data engineer",
+        status=ApplicationStatus.ASSESSMENT,
+        key_date=date(2026, 7, 28),
+    ),
+    "s3": ExtractionExpectation(
+        company_any_of=("grab",),
+        role_contains="backend engineer",
+        status=ApplicationStatus.REJECTED,
+    ),
+    "s4": ExtractionExpectation(
+        company_any_of=("stripe",),
+        role_contains="software engineering",
+        status=ApplicationStatus.OFFER,
+        key_date=date(2026, 8, 5),
+    ),
+    "s5": ExtractionExpectation(
+        # Sent by Greenhouse; the employer is Sea Group.
+        company_any_of=("sea", "sea group"),
+        role_contains="product analyst",
+        status=ApplicationStatus.APPLIED,
+    ),
+    "s8": ExtractionExpectation(
+        company_any_of=("jane street",),
+        role_contains="quantitative trading",
+        status=ApplicationStatus.INTERVIEW,
+        # Asks for availability during the week of 4 August rather than naming
+        # a slot, so both "4 Aug" and "no date yet" are reasonable.
+        key_date=date(2026, 8, 4),
+        key_date_optional=True,
+    ),
+    "s10": ExtractionExpectation(
+        company_any_of=("gic",),
+        role_contains="investment analyst",
+        status=ApplicationStatus.ACTION_NEEDED,
+        key_date=date(2026, 7, 30),
+    ),
+}
