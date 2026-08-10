@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 
@@ -55,6 +56,25 @@ def _lookback() -> timedelta:
 def _max_messages() -> int:
     raw = get_env("GMAIL_MAX_MESSAGES")
     return int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_MAX_MESSAGES
+
+
+# Gmail's own tab classification, used as a free pre-filter before any Gemini
+# call. A real inbox is overwhelmingly promotions — newsletters, receipts,
+# retail offers — and every one of them otherwise costs a router request
+# against a small daily quota, and crowds out application mail under the
+# per-run cap.
+#
+# This is a recall/cost trade-off, not a free win: recruiting mail sent
+# through marketing infrastructure can land in Promotions, and excluding the
+# tab would miss it. Set GMAIL_QUERY_FILTER to "" to search everything.
+DEFAULT_QUERY_FILTER = "-category:promotions -category:social"
+
+
+def _query_filter() -> str:
+    # get_env strips whitespace out of values, which would mangle a query, so
+    # read the raw variable and only trim the ends.
+    raw = os.environ.get("GMAIL_QUERY_FILTER")
+    return DEFAULT_QUERY_FILTER if raw is None else raw.strip()
 
 EXPIRED_TOKEN_HELP = """\
 GMAIL_REFRESH_TOKEN is expired or revoked.
@@ -152,12 +172,18 @@ def _fetch_sync(settings: Settings, cursor: str | None) -> tuple[list[Email], st
 
     # Gmail's `after:` is second-granularity and inclusive, so the exact-match
     # boundary message comes back again — filtered out by internalDate below.
+    query = f"after:{after_epoch_s}"
+    query_filter = _query_filter()
+    if query_filter:
+        query = f"{query} {query_filter}"
+    logger.info("Gmail query: %s", query)
+
     listing = (
         service.users()
         .messages()
         .list(
             userId="me",
-            q=f"after:{after_epoch_s}",
+            q=query,
             maxResults=max_messages,
         )
         .execute()
