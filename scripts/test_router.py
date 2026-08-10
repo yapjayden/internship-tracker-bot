@@ -17,13 +17,22 @@ from core.config import load_settings
 from tests.sample_emails import SAMPLES
 
 
-async def run_samples() -> None:
+def _brief(exc: BaseException) -> str:
+    """One line per error. Gemini's 429 body is several hundred characters of
+    JSON repeated identically for every sample, which buries the one line that
+    differs."""
+    text = str(exc).split("\n", 1)[0]
+    return f"{type(exc).__name__}: {text[:160]}"
+
+
+async def run_samples(limit: int | None = None) -> None:
     settings = load_settings()
+    samples = SAMPLES[:limit] if limit else SAMPLES
 
     rpm = gemini.get_limiter().rpm
-    estimate = max(0, (len(SAMPLES) - rpm)) * 60 // max(rpm, 1)
+    estimate = max(0, (len(samples) - rpm)) * 60 // max(rpm, 1)
     print(
-        f"Classifying {len(SAMPLES)} samples, paced at {rpm} req/min "
+        f"Classifying {len(samples)} samples, paced at {rpm} req/min "
         f"(~{estimate}s). Set GEMINI_RPM in .env if your quota allows more."
     )
 
@@ -31,16 +40,18 @@ async def run_samples() -> None:
     # safe to run concurrently; the shared rate limiter paces the actual
     # API calls so concurrency never becomes a quota burst.
     results = await asyncio.gather(
-        *(router_agent.classify(settings, email) for email, _ in SAMPLES),
+        *(router_agent.classify(settings, email) for email, _ in samples),
         return_exceptions=True,
     )
 
     passed = failed = errored = 0
+    quota_exhausted = False
     print()
-    for (email, expected), result in zip(SAMPLES, results):
-        if isinstance(result, Exception):
+    for (email, expected), result in zip(samples, results):
+        if isinstance(result, BaseException):
             errored += 1
-            print(f"  ERROR  {email.subject[:55]}\n         {type(result).__name__}: {result}")
+            quota_exhausted |= isinstance(result, gemini.DailyQuotaExceeded)
+            print(f"  ERROR  {email.subject[:55]}\n         {_brief(result)}")
             continue
 
         ok = result.category == expected
@@ -52,6 +63,14 @@ async def run_samples() -> None:
             print(f"         expected {expected.value}")
 
     print(f"\n  {passed} passed, {failed} misclassified, {errored} errored\n")
+
+    if quota_exhausted:
+        print(
+            f"  The daily free-tier allowance for {gemini.default_model()!r} is "
+            "spent.\n  It is per project *per model*, so pinning a different "
+            "GEMINI_MODEL in .env\n  gives you a fresh budget immediately. Use "
+            "--limit to spend less per run.\n"
+        )
 
 
 async def run_inbox() -> None:
@@ -68,8 +87,8 @@ async def run_inbox() -> None:
     print()
     for email, result in zip(emails, results):
         verdict = (
-            f"{type(result).__name__}: {result}"
-            if isinstance(result, Exception)
+            _brief(result)
+            if isinstance(result, BaseException)
             else f"{result.category.value} ({result.confidence:.2f})"
         )
         print(f"  {verdict:<40} {email.subject[:50]}")
@@ -79,5 +98,12 @@ async def run_inbox() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--inbox", action="store_true", help="classify real recent mail")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="only run the first N samples — free-tier daily quotas are small "
+        "enough that a full 10-sample run is a meaningful fraction of them",
+    )
     args = parser.parse_args()
-    asyncio.run(run_inbox() if args.inbox else run_samples())
+    asyncio.run(run_inbox() if args.inbox else run_samples(args.limit))

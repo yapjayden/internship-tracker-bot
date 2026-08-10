@@ -42,6 +42,24 @@ MAX_ATTEMPTS = 4
 # number, but refuse to hang a cron job for minutes on end.
 MAX_RETRY_DELAY_S = 90.0
 
+# Not every 429 is the same. A per-minute quota clears if you wait; a per-day
+# one does not, and its RetryInfo still suggests a ~60s wait that accomplishes
+# nothing except spending more of the allowance. Google distinguishes them only
+# in the quotaId, e.g.
+#   GenerateRequestsPerMinutePerProjectPerModel-FreeTier
+#   GenerateRequestsPerDayPerProjectPerModel-FreeTier
+DAILY_QUOTA_RE = re.compile(r"'quotaId':\s*'([^']*PerDay[^']*)'")
+
+
+class DailyQuotaExceeded(RuntimeError):
+    """The model's per-day free-tier allowance is gone. Retrying cannot help."""
+
+
+# Latched for the life of the process. Ten concurrent agents all discover the
+# daily wall within milliseconds of each other; without this each would burn
+# MAX_ATTEMPTS more requests learning the same thing.
+_daily_quota_hit: str | None = None
+
 # How to ask for minimal reasoning, most preferred first.
 #
 # These narrow classification/extraction tasks gain nothing from reasoning
@@ -125,6 +143,15 @@ def build_client(settings: Settings) -> genai.Client:
     return _client
 
 
+def _raise_if_daily_quota_spent() -> None:
+    if _daily_quota_hit is not None:
+        raise DailyQuotaExceeded(
+            f"Daily free-tier quota already exhausted this run for "
+            f"{default_model()!r} ({_daily_quota_hit}). Skipping further calls; "
+            "set GEMINI_MODEL in .env to a different model to keep going today."
+        )
+
+
 def _server_retry_delay(exc: errors.APIError) -> float | None:
     """Pull the server's requested retry delay out of a 429. Google returns a
     RetryInfo block saying exactly how long to wait; guessing a shorter
@@ -173,7 +200,9 @@ async def generate_json(
     the next variant is tried and the working one is cached process-wide, so
     only the first call ever pays for the discovery.
     """
-    global _thinking_variant
+    global _thinking_variant, _daily_quota_hit
+
+    _raise_if_daily_quota_spent()
 
     client = build_client(settings)
     limiter = get_limiter()
@@ -189,7 +218,11 @@ async def generate_json(
     last_error: Exception | None = None
     attempt = 0
     while attempt < MAX_ATTEMPTS:
+        # Another coroutine may have hit the daily wall while this one queued
+        # behind the rate limiter.
+        _raise_if_daily_quota_spent()
         await limiter.acquire()
+        _raise_if_daily_quota_spent()
         try:
             response = await client.aio.models.generate_content(
                 model=default_model(),
@@ -227,6 +260,18 @@ async def generate_json(
                 )
                 last_error = exc
                 continue
+
+            # A spent daily allowance is terminal. Waiting the ~60s the server
+            # suggests just spends more of tomorrow's budget on the same wall.
+            daily = DAILY_QUOTA_RE.search(str(exc))
+            if daily:
+                _daily_quota_hit = daily.group(1)
+                raise DailyQuotaExceeded(
+                    f"Daily free-tier quota exhausted for {default_model()!r} "
+                    f"({_daily_quota_hit}). It resets at midnight US/Pacific. "
+                    "The quota is per project *per model*, so setting GEMINI_MODEL "
+                    "in .env to a different model gives you a fresh allowance now."
+                ) from exc
 
             attempt += 1
             if exc.code not in RETRYABLE_STATUS or attempt == MAX_ATTEMPTS:
