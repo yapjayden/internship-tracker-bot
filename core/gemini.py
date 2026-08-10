@@ -42,6 +42,31 @@ MAX_ATTEMPTS = 4
 # number, but refuse to hang a cron job for minutes on end.
 MAX_RETRY_DELAY_S = 90.0
 
+# How to ask for minimal reasoning, most preferred first.
+#
+# These narrow classification/extraction tasks gain nothing from reasoning
+# tokens, and those tokens come out of max_output_tokens — left unchecked they
+# eat the whole budget and the model returns empty text. But *how* you ask for
+# less has changed across model generations: 2.5 took an integer
+# `thinking_budget`, 3.x replaced it with a `thinking_level` enum and rejects
+# the integer form outright with a bare 400 INVALID_ARGUMENT that names no
+# field.
+#
+# Since DEFAULT_MODEL is a moving alias, the generation can change under us
+# without a commit. So rather than hardcode one dialect, try them in order and
+# remember the first that the endpoint accepts.
+THINKING_VARIANTS: tuple[tuple[str, types.ThinkingConfig | None], ...] = (
+    ("thinking_budget=0", types.ThinkingConfig(thinking_budget=0)),
+    ("thinking_level=MINIMAL", types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL)),
+    ("model default", None),
+)
+
+# Once a variant leaves thinking enabled, reasoning tokens share the output
+# budget, so a limit sized for bare JSON is no longer enough.
+MIN_TOKENS_WHEN_THINKING = 2048
+
+_thinking_variant = 0
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -108,6 +133,30 @@ def _server_retry_delay(exc: errors.APIError) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def _build_config(
+    *,
+    system_instruction: str,
+    response_schema: type[T],
+    max_output_tokens: int,
+    variant_index: int,
+) -> types.GenerateContentConfig:
+    thinking = THINKING_VARIANTS[variant_index][1]
+    # Only the budget=0 dialect actually suppresses reasoning. Under the other
+    # variants the model still thinks, so give it room to finish and still emit
+    # the JSON.
+    tokens = max_output_tokens
+    if thinking is None or thinking.thinking_budget != 0:
+        tokens = max(tokens, MIN_TOKENS_WHEN_THINKING)
+
+    return types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        max_output_tokens=tokens,
+        response_mime_type="application/json",
+        response_schema=response_schema,
+        thinking_config=thinking,
+    )
+
+
 async def generate_json(
     settings: Settings,
     *,
@@ -118,23 +167,28 @@ async def generate_json(
 ) -> T:
     """Run one Gemini call constrained to `response_schema` and return the
     parsed model. Paced by the shared rate limiter, retrying transient
-    failures; raises on non-retryable errors or after MAX_ATTEMPTS."""
+    failures; raises on non-retryable errors or after MAX_ATTEMPTS.
+
+    A 400 caused by an unsupported thinking dialect is not treated as fatal:
+    the next variant is tried and the working one is cached process-wide, so
+    only the first call ever pays for the discovery.
+    """
+    global _thinking_variant
+
     client = build_client(settings)
     limiter = get_limiter()
 
-    config = types.GenerateContentConfig(
+    used_variant = _thinking_variant
+    config = _build_config(
         system_instruction=system_instruction,
-        max_output_tokens=max_output_tokens,
-        response_mime_type="application/json",
         response_schema=response_schema,
-        # 2.5+ models think by default and those tokens come out of
-        # max_output_tokens, which can consume the whole budget and return
-        # empty text. These are narrow extraction tasks that don't need it.
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        max_output_tokens=max_output_tokens,
+        variant_index=used_variant,
     )
 
     last_error: Exception | None = None
-    for attempt in range(MAX_ATTEMPTS):
+    attempt = 0
+    while attempt < MAX_ATTEMPTS:
         await limiter.acquire()
         try:
             response = await client.aio.models.generate_content(
@@ -149,16 +203,42 @@ async def generate_json(
             return parsed
 
         except errors.APIError as exc:
-            if exc.code not in RETRYABLE_STATUS or attempt == MAX_ATTEMPTS - 1:
+            # Probing for the right thinking dialect is not a retry — it is a
+            # different request — so it must not consume a retry attempt.
+            if exc.code == 400 and used_variant + 1 < len(THINKING_VARIANTS):
+                # Concurrent callers all fail on the same variant at once.
+                # Advance the shared pointer only if nobody else already did,
+                # so a burst of 400s steps forward one notch rather than
+                # skipping over the variant that would have worked.
+                if _thinking_variant == used_variant:
+                    _thinking_variant = used_variant + 1
+                    logger.warning(
+                        "Model %s rejected %s (400); falling back to %s",
+                        default_model(),
+                        THINKING_VARIANTS[used_variant][0],
+                        THINKING_VARIANTS[_thinking_variant][0],
+                    )
+                used_variant = _thinking_variant
+                config = _build_config(
+                    system_instruction=system_instruction,
+                    response_schema=response_schema,
+                    max_output_tokens=max_output_tokens,
+                    variant_index=used_variant,
+                )
+                last_error = exc
+                continue
+
+            attempt += 1
+            if exc.code not in RETRYABLE_STATUS or attempt == MAX_ATTEMPTS:
                 raise
             last_error = exc
             # Jitter so concurrent agents that hit the ceiling together don't
             # retry in lockstep and re-collide.
-            delay = _server_retry_delay(exc) or 2**attempt
+            delay = _server_retry_delay(exc) or 2 ** (attempt - 1)
             delay = min(delay, MAX_RETRY_DELAY_S) + random.uniform(0, 1)
             logger.warning(
                 "Gemini %s, retrying in %.1fs (attempt %d/%d)",
-                exc.code, delay, attempt + 1, MAX_ATTEMPTS,
+                exc.code, delay, attempt, MAX_ATTEMPTS,
             )
             await asyncio.sleep(delay)
 
