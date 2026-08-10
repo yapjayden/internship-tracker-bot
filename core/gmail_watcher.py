@@ -24,6 +24,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
@@ -40,6 +41,32 @@ FIRST_RUN_LOOKBACK = timedelta(days=1)
 # Cap per run so a first run against a busy mailbox can't fan out into
 # hundreds of downstream Gemini calls.
 MAX_MESSAGES_PER_RUN = 25
+
+EXPIRED_TOKEN_HELP = """\
+GMAIL_REFRESH_TOKEN is expired or revoked.
+
+The usual cause is not the token itself: while the OAuth consent screen is in
+"Testing" publishing status, Google expires every refresh token after 7 days.
+A cron job that runs for a week and then stops is the symptom.
+
+Fix it once, in the Google Cloud console for this project:
+
+  APIs & Services -> OAuth consent screen -> Publish app
+
+Publishing without Google's verification review is fine for personal use. You
+will see an "unverified app" interstitial during consent — click Advanced,
+then "Go to <app> (unsafe)". Refresh tokens stop expiring once published.
+
+Then mint a replacement, since the current one is already dead:
+
+  python -m scripts.gmail_oauth_setup
+
+and paste the new value into .env as GMAIL_REFRESH_TOKEN.
+
+Other causes, if the app is already published: the Google account password
+changed, access was withdrawn at myaccount.google.com/permissions, or the
+OAuth client was deleted or had its secret reset.\
+"""
 
 
 def _build_service(settings: Settings):
@@ -145,4 +172,10 @@ async def fetch_new_emails(settings: Settings, cursor: str | None) -> tuple[list
     processed. Pass None on first run to look back FIRST_RUN_LOOKBACK.
     """
     # googleapiclient is synchronous; keep it off the event loop.
-    return await asyncio.to_thread(_fetch_sync, settings, cursor)
+    try:
+        return await asyncio.to_thread(_fetch_sync, settings, cursor)
+    except RefreshError as exc:
+        # The raw error is a 25-frame traceback ending in "invalid_grant",
+        # which says nothing about the 7-day expiry that almost always causes
+        # it. Replace it with the fix.
+        raise RuntimeError(EXPIRED_TOKEN_HELP) from exc
