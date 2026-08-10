@@ -28,7 +28,7 @@ from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from core.config import Settings
+from core.config import Settings, get_env
 from core.models import Email, MailSource
 
 logger = logging.getLogger(__name__)
@@ -36,11 +36,25 @@ logger = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 # How far back to look on the very first run, when there's no cursor yet.
-FIRST_RUN_LOOKBACK = timedelta(days=1)
+# One day suits steady-state operation, but it is far too narrow to tell
+# whether the router works on real mail — most inboxes contain no application
+# email on a given day. Raise GMAIL_LOOKBACK_DAYS when validating.
+DEFAULT_LOOKBACK_DAYS = 1
 
 # Cap per run so a first run against a busy mailbox can't fan out into
 # hundreds of downstream Gemini calls.
-MAX_MESSAGES_PER_RUN = 25
+DEFAULT_MAX_MESSAGES = 25
+
+
+def _lookback() -> timedelta:
+    raw = get_env("GMAIL_LOOKBACK_DAYS")
+    days = int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_LOOKBACK_DAYS
+    return timedelta(days=days)
+
+
+def _max_messages() -> int:
+    raw = get_env("GMAIL_MAX_MESSAGES")
+    return int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_MAX_MESSAGES
 
 EXPIRED_TOKEN_HELP = """\
 GMAIL_REFRESH_TOKEN is expired or revoked.
@@ -125,12 +139,16 @@ def _to_email(message: dict) -> Email:
 def _fetch_sync(settings: Settings, cursor: str | None) -> tuple[list[Email], str]:
     service = _build_service(settings)
 
+    max_messages = _max_messages()
+
     if cursor:
         after_epoch_s = int(cursor) // 1000
         cursor_ms = int(cursor)
     else:
-        after_epoch_s = int((datetime.now(timezone.utc) - FIRST_RUN_LOOKBACK).timestamp())
+        lookback = _lookback()
+        after_epoch_s = int((datetime.now(timezone.utc) - lookback).timestamp())
         cursor_ms = after_epoch_s * 1000
+        logger.info("No cursor; looking back %s", lookback)
 
     # Gmail's `after:` is second-granularity and inclusive, so the exact-match
     # boundary message comes back again — filtered out by internalDate below.
@@ -140,15 +158,25 @@ def _fetch_sync(settings: Settings, cursor: str | None) -> tuple[list[Email], st
         .list(
             userId="me",
             q=f"after:{after_epoch_s}",
-            maxResults=MAX_MESSAGES_PER_RUN,
+            maxResults=max_messages,
         )
         .execute()
     )
 
+    stubs = listing.get("messages", [])
+    if len(stubs) >= max_messages:
+        # Worth saying out loud: the cursor advances past everything fetched,
+        # so mail beyond the cap in this window is skipped, not deferred.
+        logger.warning(
+            "Hit the %d-message cap — older mail in this window will be skipped. "
+            "Raise GMAIL_MAX_MESSAGES to widen it.",
+            max_messages,
+        )
+
     emails: list[Email] = []
     newest_ms = cursor_ms
 
-    for stub in listing.get("messages", []):
+    for stub in stubs:
         message = (
             service.users()
             .messages()
@@ -169,7 +197,7 @@ async def fetch_new_emails(settings: Settings, cursor: str | None) -> tuple[list
     """Return (new_emails, next_cursor).
 
     `cursor` is the internalDate in epoch ms of the newest message already
-    processed. Pass None on first run to look back FIRST_RUN_LOOKBACK.
+    processed. Pass None on first run to look back GMAIL_LOOKBACK_DAYS.
     """
     # googleapiclient is synchronous; keep it off the event loop.
     try:

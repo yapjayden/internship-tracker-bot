@@ -42,6 +42,13 @@ async def run() -> None:
         if isinstance(route, BaseException):
             logger.error("Routing failed for %r: %s", email.subject, route)
             continue
+        # Log every verdict, not only the keepers. A run that reports "0 of 25
+        # relevant" is indistinguishable from a broken router unless you can
+        # see what it decided and why.
+        logger.info(
+            "  %-18s %.2f  %s",
+            route.category.value, route.confidence, email.subject[:60],
+        )
         if route.category == Category.NOT_RELEVANT:
             continue
         relevant.append((email, route.category))
