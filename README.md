@@ -78,14 +78,27 @@ mail later.
 
 ## Status
 
-Stage 3 complete: Gmail watcher and router agent working, 10/10 on the
-labelled sample corpus. Extractor, research agents, tracker, and Telegram bot
-are still stubs.
+Stage 5 complete. Gmail watcher, router, extractor and the Google Sheets
+tracker are working end to end; research agents and the Telegram bot are
+still stubs.
 
-Caveat on that score: the router returned confidence 1.00 on all ten samples,
-including the ones written to be ambiguous. Confidence is currently carrying
-no information, so nothing downstream should gate on it until it has been
-checked against real mail via `--inbox`.
+- Router: 10/10 on the labelled sample corpus.
+- Tracker: verified against a real spreadsheet — two roles at one employer
+  stay separate, a legal-name variant updates in place, out-of-order mail
+  cannot walk a status backwards, and a dateless follow-up does not erase a
+  known key_date.
+- Extractor: implemented, and `scripts/test_extractor.py` exists, but has not
+  yet been run against the corpus. Its accuracy is unmeasured.
+
+Two caveats worth carrying forward:
+
+The router returns confidence 1.00 on every sample, including the ones
+written to be ambiguous. That field is carrying no information, so nothing
+should gate on it until it has been checked against real mail via `--inbox`.
+
+The tracker's one-row-per-application design depends on company-name
+matching. `scripts/test_tracker.py --offline` covers the cases we thought of;
+real mail will find others. A wrongly merged row is the failure to watch for.
 
 The pipeline runs on a GitHub Actions cron, and the schedule in
 `.github/workflows/pipeline.yml` is still commented out. Gmail push
