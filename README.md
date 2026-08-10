@@ -37,9 +37,36 @@ cp .env.example .env           # then fill in GMAIL_CLIENT_ID / GMAIL_CLIENT_SEC
 python -m scripts.gmail_oauth_setup    # one-time; prints GMAIL_REFRESH_TOKEN
 python -m scripts.test_gmail_watcher   # prints new subjects/senders
 
+python -m scripts.list_models --probe  # find a model your key can really call
+                                       # then set GEMINI_MODEL in .env
 python -m scripts.test_router          # classify 10 labelled sample emails
+python -m scripts.test_router --limit 3   # cheaper run while tuning the prompt
 python -m scripts.test_router --inbox  # classify your real recent mail
 ```
+
+### Choosing a model
+
+Pin `GEMINI_MODEL` explicitly rather than leaving it blank. The default is
+the `gemini-flash-latest` alias, which silently moves between model
+generations and has already broken this project twice — once when its target
+changed the thinking-config format, once when it landed on a flagship whose
+free tier allows only 20 requests *per day*.
+
+Do not pick a model by reading `list_models` output. That listing is what
+exists, not what your key may call: it advertises the entire 2.5 generation,
+all of which returns `404 no longer available to new users` for keys created
+recently. `--probe` sends one real request per model and reports what
+actually answers. Prefer a `flash-lite` model — routing is a short
+single-label task, and lite tiers carry much larger free daily quotas.
+
+When Gemini calls fail, the error tells you which tool to reach for:
+
+| Error | Meaning | Next step |
+|---|---|---|
+| `404 no longer available` | model retired for your key | `list_models --probe` |
+| `400 INVALID_ARGUMENT` | request option unsupported | `diagnose_gemini` |
+| `429 ...PerMinute...` | rate too high | lower `GEMINI_RPM` |
+| `429 ...PerDay...` | daily allowance spent | switch `GEMINI_MODEL` — the quota is per model, so a different one is usable immediately |
 
 Each credential in `.env` must be on a single line, unquoted — long values
 pasted from a browser often wrap, which produces confusing `invalid_client`
@@ -51,5 +78,16 @@ mail later.
 
 ## Status
 
-Stage 3: Gmail watcher and router agent working. Extractor, research agents,
-tracker, and Telegram bot are still stubs.
+Stage 3 complete: Gmail watcher and router agent working, 10/10 on the
+labelled sample corpus. Extractor, research agents, tracker, and Telegram bot
+are still stubs.
+
+Caveat on that score: the router returned confidence 1.00 on all ten samples,
+including the ones written to be ambiguous. Confidence is currently carrying
+no information, so nothing downstream should gate on it until it has been
+checked against real mail via `--inbox`.
+
+The pipeline runs on a GitHub Actions cron, and the schedule in
+`.github/workflows/pipeline.yml` is still commented out. Gmail push
+notifications (Pub/Sub -> Cloud Run) are the intended trigger but require a
+billing account; see the hosting note above.
