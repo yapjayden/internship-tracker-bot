@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from core import extractor_agent, gmail_watcher, router_agent, state, tracker
+from core import extractor_agent, gmail_watcher, notifier, router_agent, state, tracker
 from core.config import load_settings
 from core.models import Category, Email
 
@@ -70,7 +70,6 @@ async def run() -> None:
             continue
 
         # TODO Stage 7/8: fan out research_agent per company, interviews only.
-        # TODO Stage 6: notifier.notify_new_item.
         try:
             # Serialised inside the tracker: concurrent upserts for the same
             # application would otherwise each append their own row.
@@ -84,6 +83,18 @@ async def run() -> None:
             "Added" if is_new else "Updated",
             details.company, details.role, details.status.value, details.key_date,
         )
+
+        # Notify only after the row is safely written. The sheet is the
+        # durable record; a ping about something that failed to persist would
+        # point at a tracker that does not contain it.
+        try:
+            await notifier.notify_new_item(
+                settings, category, details, email, is_new=is_new
+            )
+        except Exception as exc:
+            # notify_new_item already swallows delivery failures, so reaching
+            # here means a config problem — still not worth losing the run.
+            logger.error("Notification failed for %r: %s", email.subject, exc)
 
     # Only advance the cursor after a clean pass, so a mid-run crash re-reads
     # the same messages next time rather than silently skipping them.

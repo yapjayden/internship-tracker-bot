@@ -78,9 +78,9 @@ mail later.
 
 ## Status
 
-Stage 5 complete. Gmail watcher, router, extractor and the Google Sheets
-tracker are working end to end; research agents and the Telegram bot are
-still stubs.
+Stage 6 complete. Gmail watcher, router, extractor, Google Sheets tracker
+and Telegram push notifications are wired end to end. Research agents and the
+bot's on-demand query side (bot/app.py) are still stubs.
 
 - Router: 10/10 on the labelled sample corpus.
 - Tracker: verified against a real spreadsheet — two roles at one employer
@@ -89,6 +89,9 @@ still stubs.
   known key_date.
 - Extractor: implemented, and `scripts/test_extractor.py` exists, but has not
   yet been run against the corpus. Its accuracy is unmeasured.
+- Notifier: message rendering, HTML escaping, length capping and retry
+  behaviour verified offline and against a mocked transport. Live delivery
+  needs a bot token.
 
 Two caveats worth carrying forward:
 
