@@ -89,9 +89,9 @@ bot's on-demand query side (bot/app.py) are still stubs.
   known key_date.
 - Extractor: implemented, and `scripts/test_extractor.py` exists, but has not
   yet been run against the corpus. Its accuracy is unmeasured.
-- Notifier: message rendering, HTML escaping, length capping and retry
-  behaviour verified offline and against a mocked transport. Live delivery
-  needs a bot token.
+- Notifier: verified live — messages delivered to a real chat. Rendering,
+  HTML escaping, length capping and retry behaviour also covered offline and
+  against a mocked transport.
 
 Two caveats worth carrying forward:
 
