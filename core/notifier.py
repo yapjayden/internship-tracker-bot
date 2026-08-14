@@ -14,6 +14,8 @@ import asyncio
 import html
 import logging
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -51,6 +53,11 @@ DEFAULT_NOTIFY_STATUSES = frozenset(
     }
 )
 
+# Times reach here in UTC — Gmail's internalDate is UTC, CI runs in UTC, and
+# the extractor normalises to it. Showing that raw makes the reader convert an
+# interview time in their head. Render in the timezone they actually live in.
+DEFAULT_DISPLAY_TZ = "Asia/Singapore"
+
 STATUS_PREFIX = {
     ApplicationStatus.APPLIED: "📮 Applied",
     ApplicationStatus.ASSESSMENT: "📝 Assessment",
@@ -86,6 +93,25 @@ def should_notify(status: ApplicationStatus) -> bool:
     return status in notify_statuses()
 
 
+def _display_tz() -> ZoneInfo:
+    name = os.environ.get("DISPLAY_TIMEZONE", "").strip() or DEFAULT_DISPLAY_TZ
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown DISPLAY_TIMEZONE %r, falling back to UTC", name)
+        return ZoneInfo("UTC")
+
+
+def format_key_date(value: datetime) -> str:
+    # A naive datetime means the email gave a wall-clock time with no zone. The
+    # extractor is told to read those as Singapore time, so label it rather
+    # than silently treating it as UTC and shifting it by eight hours.
+    tz = _display_tz()
+    if value.tzinfo is None:
+        return value.strftime("%a %d %b %Y, %H:%M")
+    return value.astimezone(tz).strftime("%a %d %b %Y, %H:%M %Z")
+
+
 def _esc(text: str) -> str:
     """Escape for Telegram's HTML parse mode.
 
@@ -114,10 +140,7 @@ def build_message(
     ]
 
     if extracted.key_date:
-        # Show the offset rather than implying a timezone: the pipeline may run
-        # in UTC on a CI runner while the reader is in SGT.
-        stamp = extracted.key_date.strftime("%a %d %b %Y, %H:%M %Z").strip()
-        lines.append(f"🗓 {_esc(stamp)}")
+        lines.append(f"🗓 {_esc(format_key_date(extracted.key_date))}")
 
     if extracted.next_steps:
         lines += ["", f"➡️ {_esc(extracted.next_steps)}"]
