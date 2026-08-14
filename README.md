@@ -87,8 +87,10 @@ bot's on-demand query side (bot/app.py) are still stubs.
   stay separate, a legal-name variant updates in place, out-of-order mail
   cannot walk a status backwards, and a dateless follow-up does not erase a
   known key_date.
-- Extractor: implemented, and `scripts/test_extractor.py` exists, but has not
-  yet been run against the corpus. Its accuracy is unmeasured.
+- Extractor: 7/7 clean on the labelled corpus, every field. Both
+  intermediary fixtures resolved to the employer rather than the sender's
+  domain (HackerRank -> GovTech, Greenhouse -> Sea Group), and the one email
+  that implies a date without naming one correctly yielded no key_date.
 - Notifier: verified live — messages delivered to a real chat. Rendering,
   HTML escaping, length capping and retry behaviour also covered offline and
   against a mocked transport.
