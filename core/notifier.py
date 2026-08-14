@@ -159,6 +159,44 @@ def build_message(
     return message
 
 
+def _rejection_hint(body: str, token: str, chat_id: str) -> str:
+    """Turn Telegram's 4xx wording into the thing to actually change.
+
+    Its messages describe the API's view, not the mistake. "The bot can't send
+    messages to the bot" is what you get for pasting the token's leading
+    number as the chat id — a copy-paste slip that reads like a permissions
+    problem.
+    """
+    lowered = body.lower()
+    bot_id = token.split(":", 1)[0]
+
+    if "can't send messages to the bot" in lowered or chat_id == bot_id:
+        return (
+            f"TELEGRAM_CHAT_ID is {chat_id}, which is the bot's own id — the "
+            "number before the colon in TELEGRAM_BOT_TOKEN. You need your own "
+            "id. Run: python -m scripts.telegram_chat_id"
+        )
+    if "chat not found" in lowered:
+        return (
+            f"No chat with id {chat_id}. If it is your user id, message the bot "
+            "once first — Telegram forbids a bot from opening a conversation. "
+            "Run: python -m scripts.telegram_chat_id"
+        )
+    if "bot was blocked" in lowered:
+        return "You have blocked this bot. Unblock it in Telegram."
+    if "unauthorized" in lowered:
+        return (
+            "TELEGRAM_BOT_TOKEN was rejected. Copy the whole value from "
+            "@BotFather, including the part before the colon."
+        )
+    if "can't parse entities" in lowered:
+        return (
+            "Telegram could not parse the message HTML. This is a formatting "
+            "bug, not a config problem — please report the message that failed."
+        )
+    return ""
+
+
 async def send_message(settings: Settings, text: str) -> bool:
     """POST one message. Returns True on success, False once it gives up."""
     token = require_setting(settings.telegram_bot_token, "TELEGRAM_BOT_TOKEN")
@@ -208,6 +246,9 @@ async def send_message(settings: Settings, text: str) -> bool:
                 logger.error(
                     "Telegram rejected the message (%d): %s", response.status_code, body
                 )
+                hint = _rejection_hint(body, token, chat_id)
+                if hint:
+                    logger.error("%s", hint)
                 return False
 
             logger.warning(
