@@ -73,8 +73,16 @@ DEFAULT_QUERY_FILTER = "-category:promotions -category:social"
 def _query_filter() -> str:
     # get_env strips whitespace out of values, which would mangle a query, so
     # read the raw variable and only trim the ends.
-    raw = os.environ.get("GMAIL_QUERY_FILTER")
-    return DEFAULT_QUERY_FILTER if raw is None else raw.strip()
+    #
+    # Empty means "use the default", not "search everything". A GitHub Actions
+    # `env:` entry bound to an unset repository variable arrives as an empty
+    # string rather than being absent, so treating empty as "no filter" would
+    # quietly disable the promotions exclusion in CI and flood the router with
+    # newsletters. Disabling is deliberate and explicit: set it to "none".
+    raw = (os.environ.get("GMAIL_QUERY_FILTER") or "").strip()
+    if not raw:
+        return DEFAULT_QUERY_FILTER
+    return "" if raw.lower() == "none" else raw
 
 EXPIRED_TOKEN_HELP = """\
 GMAIL_REFRESH_TOKEN is expired or revoked.

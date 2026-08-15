@@ -2,31 +2,65 @@ name: Email pipeline
 
 on:
   workflow_dispatch: {}
-  # Uncomment once the pipeline is verified end-to-end (Stage 11).
-  # schedule:
-  #   - cron: "*/15 * * * *"
+  schedule:
+    # Every 15 minutes. GitHub treats scheduled runs as best-effort and delays
+    # them under load, sometimes by 10+ minutes, so treat this as "roughly
+    # every quarter hour" rather than a guarantee. Nothing downstream depends
+    # on the interval: the cursor lives in the sheet, so a late or skipped run
+    # picks up everything since the last one.
+    - cron: "*/15 * * * *"
+
+# One run at a time. Two overlapping runs would both read the same cursor,
+# both classify the same mail, and both notify — duplicate Telegram messages
+# and wasted quota. Queue rather than cancel: a cancelled run may have written
+# rows without advancing the cursor.
+concurrency:
+  group: email-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+    # A hung API call should not hold the concurrency slot until the next
+    # scheduled run collides with it.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run pipeline
         env:
+          # --- Required ---
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           TRACKER_SPREADSHEET_ID: ${{ secrets.TRACKER_SPREADSHEET_ID }}
+          # Must be the flattened one-line form. There is no file to point
+          # GOOGLE_SERVICE_ACCOUNT_FILE at on a CI runner.
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          # Without this, research falls back to Gemini search grounding, which
+          # on the free tier is billed against the same request quota as the
+          # router and fails alongside it.
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+          # --- Tuning, as repository variables so CI matches your .env ---
+          # Unset variables become empty strings, which every reader treats as
+          # "use the default", so none of these are required.
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_RPM: ${{ vars.GEMINI_RPM }}
+          GMAIL_LOOKBACK_DAYS: ${{ vars.GMAIL_LOOKBACK_DAYS }}
+          GMAIL_MAX_MESSAGES: ${{ vars.GMAIL_MAX_MESSAGES }}
+          GMAIL_QUERY_FILTER: ${{ vars.GMAIL_QUERY_FILTER }}
+          NOTIFY_STATUSES: ${{ vars.NOTIFY_STATUSES }}
+          DISPLAY_TIMEZONE: ${{ vars.DISPLAY_TIMEZONE }}
         run: python -m pipeline.run_once
