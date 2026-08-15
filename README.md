@@ -111,10 +111,12 @@ the right choice on a paid tier, where the attribution is correct.
   stay separate, a legal-name variant updates in place, out-of-order mail
   cannot walk a status backwards, and a dateless follow-up does not erase a
   known key_date.
-- Extractor: 7/7 clean on the labelled corpus, every field. Both
-  intermediary fixtures resolved to the employer rather than the sender's
-  domain (HackerRank -> GovTech, Greenhouse -> Sea Group), and the one email
-  that implies a date without naming one correctly yielded no key_date.
+- Extractor: 8/8 clean on the labelled corpus, every field. Both intermediary
+  fixtures resolved to the employer rather than the sender's domain
+  (HackerRank -> GovTech, Greenhouse -> Sea Group); the one email that implies
+  a date without naming one yielded no key_date; and the Shopee/FBS fixture
+  produced the business unit while the seven emails naming none left it empty
+  rather than inventing one.
 - Notifier: verified live — messages delivered to a real chat. Rendering,
   HTML escaping, length capping and retry behaviour also covered offline and
   against a mocked transport.
