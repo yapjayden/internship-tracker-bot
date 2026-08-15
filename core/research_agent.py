@@ -6,12 +6,17 @@ across companies safe. A failure in one instance must not crash the others;
 callers should wrap each task so a raised exception becomes a logged miss,
 not a cancelled gather.
 
-Search happens inside the model via Google Search grounding rather than
-through a separate search API. That keeps this to one call and one
-credential, and returns source URLs alongside the prose. The trade is that it
-spends the same per-model daily Gemini allowance as routing and extraction;
-if that becomes the binding constraint, moving to a dedicated search provider
-is contained, since only the gemini call below would change.
+Two ways to get the facts, chosen by whether TAVILY_API_KEY is set:
+
+- Tavily. Searches run first, and their extracts go into the prompt. Preferred,
+  because Tavily's free pool is separate from Gemini's.
+- Gemini's built-in Google Search grounding. One call, no extra key — but on
+  the free tier it is billed against the same generate_content request quota
+  the router and extractor spend, not the separate search-grounding quota. It
+  therefore adds no search budget and runs out alongside classification. Kept
+  as a fallback for anyone on a paid tier, where that attribution is correct.
+
+Both paths end at the same ResearchBrief, so callers never learn which ran.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from core import gemini
+from core import gemini, search
 from core.config import Settings
 from core.models import ResearchBrief
 
@@ -69,33 +74,106 @@ def _prompt(company: str, role: str) -> str:
     )
 
 
-async def research_company(
+def search_queries(company: str, role: str) -> list[str]:
+    """The three searches the brief is built from, one per section that needs
+    external facts. Culture and interview format are separate queries because
+    a single "tell me about X" search returns marketing copy for both."""
+    return [
+        f"{company} news announcement 2026",
+        f"{company} {role} interview process rounds candidate experience",
+        f"{company} company values culture careers",
+    ]
+
+
+def _render_results(results: list[search.SearchResult], budget: int = 6000) -> str:
+    """Flatten search extracts into the prompt, newest-first, within a budget.
+
+    Truncated per result rather than globally so a single long page cannot
+    crowd out every other source.
+    """
+    blocks = []
+    used = 0
+    for index, result in enumerate(results, 1):
+        content = result.content[:900]
+        block = f"[{index}] {result.title}\n{result.url}\n{content}\n"
+        if used + len(block) > budget:
+            break
+        blocks.append(block)
+        used += len(block)
+    return "\n".join(blocks)
+
+
+async def _brief_via_tavily(
     settings: Settings, company: str, role: str
-) -> ResearchBrief:
-    """Produce one prep brief. Raises on failure; callers decide the policy."""
-    result = await gemini.generate_grounded_text(
+) -> tuple[str, list[str]]:
+    results = await search.search_many(settings, search_queries(company, role))
+    if not results:
+        raise RuntimeError(
+            f"No search results for {company}. Check TAVILY_API_KEY and its "
+            "remaining monthly quota at https://app.tavily.com"
+        )
+
+    prompt = (
+        f"{_prompt(company, role)}\n\n"
+        "Use only the search results below. If they do not support a section, "
+        "write \"not found\" for it.\n\n"
+        "SEARCH RESULTS\n"
+        f"{_render_results(results)}"
+    )
+
+    # use_search_tool=False: the facts are already in the prompt, and enabling
+    # the tool here would spend the Gemini request quota this path exists to
+    # avoid.
+    generated = await gemini.generate_grounded_text(
+        settings,
+        system_instruction=SYSTEM_INSTRUCTION,
+        prompt=prompt,
+        max_output_tokens=2048,
+        use_search_tool=False,
+    )
+    return generated.text, [f"{r.title} — {r.url}" if r.title else r.url for r in results]
+
+
+async def _brief_via_grounding(
+    settings: Settings, company: str, role: str
+) -> tuple[str, list[str]]:
+    generated = await gemini.generate_grounded_text(
         settings,
         system_instruction=SYSTEM_INSTRUCTION,
         prompt=_prompt(company, role),
         max_output_tokens=2048,
     )
+    return generated.text, generated.sources
 
-    if not result.sources:
-        # Worth flagging rather than hiding: with no grounding hits the model
-        # answered from training data, which for "recent developments" is
-        # exactly where it is least reliable.
+
+async def research_company(
+    settings: Settings, company: str, role: str
+) -> ResearchBrief:
+    """Produce one prep brief. Raises on failure; callers decide the policy."""
+    if search.is_configured(settings):
+        text, sources = await _brief_via_tavily(settings, company, role)
+    else:
+        logger.info(
+            "TAVILY_API_KEY not set; using Gemini search grounding, which draws "
+            "on the same request quota as routing and extraction."
+        )
+        text, sources = await _brief_via_grounding(settings, company, role)
+
+    if not sources:
+        # Worth flagging rather than hiding: with no sources the model answered
+        # from training data, which for "recent developments" is exactly where
+        # it is least reliable.
         logger.warning(
-            "No grounding sources for %s — brief is unverified model recall", company
+            "No sources for %s — brief is unverified model recall", company
         )
 
     logger.info(
-        "Researched %s (%d chars, %d source(s))",
-        company, len(result.text), len(result.sources),
+        "Researched %s (%d chars, %d source(s))", company, len(text), len(sources)
     )
 
     return ResearchBrief(
         company=company,
-        brief_text=result.text,
+        brief_text=text,
         generated_at=datetime.now(timezone.utc),
-        sources=result.sources[:MAX_SOURCES],
+        sources=sources[:MAX_SOURCES],
     )

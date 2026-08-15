@@ -56,6 +56,7 @@ class Settings:
     google_service_account_file: str = ""
     google_service_account_json: str = ""
     tracker_spreadsheet_id: str = ""
+    tavily_api_key: str = ""
 
 
 def require_setting(value: str, env_name: str) -> str:
@@ -79,4 +80,5 @@ def load_settings() -> Settings:
         # whitespace, so it skips get_env's whitespace stripping.
         google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip(),
         tracker_spreadsheet_id=get_env("TRACKER_SPREADSHEET_ID"),
+        tavily_api_key=get_env("TAVILY_API_KEY"),
     )

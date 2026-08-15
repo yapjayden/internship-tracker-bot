@@ -88,11 +88,13 @@ Three LLM agents so far: router (which category), extractor (which fields),
 research (what to know before the interview). The notifier and tracker are not
 agents; they push and persist what the agents decide.
 
-Research uses Gemini's built-in Google Search grounding rather than a separate
-search API, so there is no extra key. The cost is that it draws on the same
-per-model daily Gemini allowance as routing and extraction. If that becomes
-the binding constraint, moving search to a dedicated provider such as Tavily
-only changes the one call inside `core/research_agent.py`.
+Research needs a free Tavily key (`TAVILY_API_KEY`, no card). Gemini's
+built-in Google Search grounding was tried first and does not work on the free
+tier: grounded requests are billed against the ordinary `generate_content`
+request quota rather than the separate search-grounding quota, so they buy no
+search budget and fail alongside routing and extraction. The grounding path is
+still there and is selected automatically when no Tavily key is set — it is
+the right choice on a paid tier, where the attribution is correct.
 
 - Router: 10/10 on the labelled sample corpus.
 - Tracker: verified against a real spreadsheet — two roles at one employer

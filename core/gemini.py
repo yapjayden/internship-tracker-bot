@@ -325,8 +325,9 @@ async def generate_grounded_text(
     system_instruction: str,
     prompt: str,
     max_output_tokens: int = 2048,
+    use_search_tool: bool = True,
 ) -> GroundedText:
-    """Answer a question with Google Search grounding, returning prose.
+    """Answer a question in prose, optionally letting the model search.
 
     Deliberately not generate_json. Grounding and structured output can be
     combined on current models, but the citations come back empty when they
@@ -346,7 +347,9 @@ async def generate_grounded_text(
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
         max_output_tokens=max_output_tokens,
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+        tools=(
+            [types.Tool(google_search=types.GoogleSearch())] if use_search_tool else None
+        ),
     )
 
     last_error: Exception | None = None

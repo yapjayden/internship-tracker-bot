@@ -4,9 +4,10 @@
     python -m scripts.test_research                  # research a default company
     python -m scripts.test_research "Grab" "Data Analyst Intern"
 
-Each live run is one grounded Gemini request, drawn from the same per-model
-daily allowance as routing and extraction — so keep an eye on it if you have
-also been running the router over a large inbox.
+A live run costs three Tavily searches plus one Gemini call. Without
+TAVILY_API_KEY it falls back to Gemini search grounding, which on the free
+tier spends the same request quota as the router and extractor and will fail
+alongside them.
 
 There is no pass/fail here. Whether a brief is any good is a judgement call,
 so this prints it for you to read. What it does check is the mechanical part:
@@ -20,7 +21,7 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 
-from core import notifier, research_agent
+from core import notifier, research_agent, search
 from core.config import load_settings
 from core.models import (
     ApplicationStatus,
@@ -43,13 +44,19 @@ def run_offline(company: str, role: str) -> int:
     print("PROMPT")
     print("=" * 68)
     print(research_agent._prompt(company, role))
+    print("\n" + "=" * 68)
+    print("TAVILY QUERIES")
+    print("=" * 68)
+    for query in research_agent.search_queries(company, role):
+        print(f"  {query}")
     print("\nNo API calls made.\n")
     return 0
 
 
 async def run_live(company: str, role: str) -> int:
     settings = load_settings()
-    print(f"\nResearching {company} for a {role} interview...\n")
+    backend = "Tavily" if search.is_configured(settings) else "Gemini grounding"
+    print(f"\nResearching {company} for a {role} interview, via {backend}...\n")
 
     brief = await research_agent.research_company(settings, company, role)
 
