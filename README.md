@@ -106,7 +106,9 @@ search budget and fail alongside routing and extraction. The grounding path is
 still there and is selected automatically when no Tavily key is set — it is
 the right choice on a paid tier, where the attribution is correct.
 
-- Router: 10/10 on the labelled sample corpus.
+- Router: 13/13 on the labelled corpus, and running live on a schedule. Two
+  of those cases came from real mail: a verification code it first filed as an
+  application update, and a feedback-form confirmation it correctly rejected.
 - Tracker: verified against a real spreadsheet — two roles at one employer
   stay separate, a legal-name variant updates in place, out-of-order mail
   cannot walk a status backwards, and a dateless follow-up does not erase a
@@ -123,9 +125,10 @@ the right choice on a paid tier, where the attribution is correct.
 
 Two caveats worth carrying forward:
 
-The router returns confidence 1.00 on every sample, including the ones
-written to be ambiguous. That field is carrying no information, so nothing
-should gate on it until it has been checked against real mail via `--inbox`.
+Router confidence is nearly always 1.00 and should not be gated on. Real mail
+moved it slightly — the one false positive so far scored 0.90 and a borderline
+rejection 0.95, against 1.00 elsewhere — which is suggestive but nowhere near
+a usable threshold.
 
 The tracker's one-row-per-application design depends on company-name
 matching. `scripts/test_tracker.py --offline` covers the cases we thought of;

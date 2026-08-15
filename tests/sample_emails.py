@@ -1,9 +1,14 @@
-"""Synthetic emails for testing the router and extractor.
+"""Emails for testing the router and extractor.
 
-Deliberately fabricated rather than copied from a real inbox, so test runs
-never depend on — or persist — actual mail. Several are near-misses chosen
-to catch keyword-matching: a newsletter containing "interview", a rejection
-worded warmly, a careers-fair blast that looks like an invitation.
+Bodies are written rather than copied, so test runs never depend on — or
+persist — actual mail. Several are near-misses chosen to catch
+keyword-matching: a newsletter containing "interview", a rejection worded
+warmly, a careers-fair blast that looks like an invitation.
+
+The later cases are modelled on mail the deployed pipeline actually got wrong
+or nearly got wrong, with the wording reconstructed. Those are the valuable
+ones: a corpus written by the same person who wrote the prompt shares its
+blind spots, and only real mail finds them.
 """
 
 from dataclasses import dataclass
