@@ -83,7 +83,12 @@ async def run_live(company: str, role: str) -> int:
     # The brief only matters if it survives into a notification, so render one.
     email = Email(
         source=MailSource.GMAIL, message_id="t", sender="recruiting@example.com",
-        subject=f"Interview — {role}", received_at=datetime.now(timezone.utc),
+        # Deliberately not just "Interview — {role}". The footer line exists to
+        # carry what the extracted fields do not — the programme name, the
+        # intake year, the string you would search Gmail for — and a fixture
+        # that merely repeats the header makes it look like dead space.
+        subject=f"Interview Invitation — {role} (Summer 2027 Programme)",
+        received_at=datetime.now(timezone.utc),
         body_text="",
     )
     details = ExtractedDetails(
