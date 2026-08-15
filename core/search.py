@@ -119,27 +119,41 @@ async def search(settings: Settings, query: str) -> list[SearchResult]:
 
 
 async def search_many(settings: Settings, queries: list[str]) -> list[SearchResult]:
-    """Run several searches concurrently and merge, keeping first-seen order.
+    """Run several searches concurrently and merge them round-robin.
 
-    Deduplicated by URL: the queries overlap by design — a company's newsroom
-    answers both "recent news" and "what they value" — and the same page twice
-    in a prompt just spends tokens.
+    Round-robin rather than one query's results after another's: downstream
+    consumers truncate, and concatenating means the first query fills every
+    slot. A brief showed four news links and dropped both interview write-ups
+    purely because the news query happened to run first.
+
+    Deduplicated by URL, since the queries overlap by design — a company's
+    newsroom answers both "recent news" and "what they value" — and the same
+    page twice in a prompt only spends tokens.
     """
     batches = await asyncio.gather(
         *(search(settings, query) for query in queries), return_exceptions=True
     )
 
-    merged: list[SearchResult] = []
-    seen: set[str] = set()
+    usable: list[list[SearchResult]] = []
     for query, batch in zip(queries, batches):
         if isinstance(batch, BaseException):
             logger.warning("Search failed for %r: %s", query, batch)
             continue
-        for result in batch:
+        usable.append(batch)
+
+    merged: list[SearchResult] = []
+    seen: set[str] = set()
+    for rank in range(max((len(b) for b in usable), default=0)):
+        for batch in usable:
+            if rank >= len(batch):
+                continue
+            result = batch[rank]
             if result.url in seen:
                 continue
             seen.add(result.url)
             merged.append(result)
 
-    logger.info("Tavily returned %d unique result(s) across %d queries", len(merged), len(queries))
+    logger.info(
+        "Tavily returned %d unique result(s) across %d queries", len(merged), len(queries)
+    )
     return merged

@@ -37,8 +37,13 @@ MAX_ATTEMPTS = 3
 # Telegram hard-rejects messages over 4096 characters. A research brief is the
 # only field that can realistically approach that.
 MAX_MESSAGE_CHARS = 4096
-BRIEF_BUDGET = 1200
 MAX_SOURCES_SHOWN = 4
+# Headroom against the HTML escaping applied after the budget is computed:
+# one "&" becomes five characters.
+SAFETY_MARGIN = 200
+# Source titles can be a whole press-release headline. The URL is the part
+# that has to survive intact for the link to work.
+MAX_SOURCE_TITLE = 60
 
 # Which statuses are worth interrupting someone for. Acknowledgements are the
 # bulk of the volume and carry no news — they still land in the tracker, they
@@ -123,6 +128,37 @@ def _esc(text: str) -> str:
     return html.escape(text or "", quote=False)
 
 
+def _truncate_escaped(text: str, limit: int) -> str:
+    """Shorten already-escaped text without splitting an HTML entity.
+
+    Cutting inside "&amp;" leaves "&am", which Telegram rejects as malformed
+    HTML — losing the entire message rather than the tail of one field.
+    """
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+
+    cut = text[:limit]
+    # Prefer a word boundary, then step back off any dangling entity.
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    ampersand = cut.rfind("&")
+    if ampersand != -1 and ";" not in cut[ampersand:]:
+        cut = cut[:ampersand]
+    return cut.rstrip() + "…"
+
+
+def _short_source(source: str) -> str:
+    """Trim a long headline off a "Title — URL" pair, keeping the URL whole."""
+    title, separator, url = source.rpartition(" — ")
+    if not separator:
+        return source
+    if len(title) > MAX_SOURCE_TITLE:
+        title = title[:MAX_SOURCE_TITLE].rstrip() + "…"
+    return f"{title} — {url}"
+
+
 def build_message(
     category: Category,
     extracted: ExtractedDetails,
@@ -146,22 +182,36 @@ def build_message(
     if extracted.next_steps:
         lines += ["", f"➡️ {_esc(extracted.next_steps)}"]
 
-    if research_brief and research_brief.brief_text.strip():
-        brief = research_brief.brief_text.strip()
-        if len(brief) > BRIEF_BUDGET:
-            brief = brief[:BRIEF_BUDGET].rsplit(" ", 1)[0] + "…"
-        lines += ["", "<b>Prep brief</b>", _esc(brief)]
+    footer = ["", f"<i>{_esc(email.subject[:120])}</i>"]
 
+    if research_brief and research_brief.brief_text.strip():
+        source_lines: list[str] = []
         if research_brief.sources:
             # A brief the reader might repeat to an interviewer has to be
-            # checkable. Only a few fit before the message gets unreadable.
-            lines += ["", "<b>Sources</b>"]
-            lines += [_esc(source) for source in research_brief.sources[:MAX_SOURCES_SHOWN]]
+            # checkable.
+            source_lines = ["", "<b>Sources</b>"] + [
+                _esc(_short_source(s)) for s in research_brief.sources[:MAX_SOURCES_SHOWN]
+            ]
         else:
             # Say so rather than let unsourced recall look researched.
-            lines += ["", "<i>No sources found — treat as unverified.</i>"]
+            source_lines = ["", "<i>No sources found — treat as unverified.</i>"]
 
-    lines += ["", f"<i>{_esc(email.subject[:120])}</i>"]
+        # Give the brief whatever space is actually left, rather than a fixed
+        # budget. The brief ends with the suggested questions — the most
+        # useful part — so a too-tight constant silently cuts exactly what the
+        # reader wanted, even when the message is only half full.
+        fixed = "\n".join(lines + ["", "<b>Prep brief</b>"] + source_lines + footer)
+        available = MAX_MESSAGE_CHARS - len(fixed) - SAFETY_MARGIN
+
+        # Escape first, then measure. Escaping expands text — one "&" becomes
+        # five characters — so budgeting against the raw length can still
+        # overflow, and the blind cut that follows could land inside an entity
+        # and make Telegram reject the whole message as malformed HTML.
+        brief = _truncate_escaped(_esc(research_brief.brief_text.strip()), available)
+
+        lines += ["", "<b>Prep brief</b>", brief] + source_lines
+
+    lines += footer
 
     message = "\n".join(lines)
     if len(message) > MAX_MESSAGE_CHARS:
