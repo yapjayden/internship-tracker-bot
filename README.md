@@ -39,7 +39,7 @@ python -m scripts.test_gmail_watcher   # prints new subjects/senders
 
 python -m scripts.list_models --probe  # find a model your key can really call
                                        # then set GEMINI_MODEL in .env
-python -m scripts.test_router          # classify 10 labelled sample emails
+python -m scripts.test_router          # classify the labelled sample emails
 python -m scripts.test_router --limit 3   # cheaper run while tuning the prompt
 python -m scripts.test_router --inbox  # classify your real recent mail
 ```
@@ -134,7 +134,13 @@ The tracker's one-row-per-application design depends on company-name
 matching. `scripts/test_tracker.py --offline` covers the cases we thought of;
 real mail will find others. A wrongly merged row is the failure to watch for.
 
-The pipeline runs on a GitHub Actions cron, and the schedule in
-`.github/workflows/pipeline.yml` is still commented out. Gmail push
-notifications (Pub/Sub -> Cloud Run) are the intended trigger but require a
-billing account; see the hosting note above.
+The pipeline runs live on a GitHub Actions cron, every 15 minutes. GitHub
+treats scheduled runs as best-effort and delays them under load, so treat that
+as approximate; nothing depends on the interval, since the cursor lives in the
+sheet and a late run simply picks up more. Two operational notes: GitHub
+disables scheduled workflows after 60 days of repository inactivity, and a
+failing run emails you, which is the only signal the tracker has stopped.
+
+Gmail push notifications (Pub/Sub -> Cloud Run) would replace the cron with
+seconds-latency delivery, but require a billing account; see the hosting note
+above.
