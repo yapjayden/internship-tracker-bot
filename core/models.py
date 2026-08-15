@@ -102,3 +102,8 @@ class ResearchBrief(BaseModel):
     company: str
     brief_text: str
     generated_at: datetime
+    # Pages the model actually consulted, from Google Search grounding. A
+    # brief you might repeat out loud in an interview needs to be checkable,
+    # and an empty list is itself informative: it means the model answered
+    # from memory rather than searching, so trust it less.
+    sources: list[str] = Field(default_factory=list)

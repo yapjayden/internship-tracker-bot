@@ -78,9 +78,21 @@ mail later.
 
 ## Status
 
-Stage 6 complete. Gmail watcher, router, extractor, Google Sheets tracker
-and Telegram push notifications are wired end to end. Research agents and the
-bot's on-demand query side (bot/app.py) are still stubs.
+Stage 7 complete. Gmail watcher, router, extractor, Google Sheets tracker and
+Telegram push notifications run end to end, and the research agent produces a
+prep brief for a single company. Stage 8 — fanning research out across many
+companies from `run_once` — and the bot's on-demand query side (`bot/app.py`)
+are still to do.
+
+Three LLM agents so far: router (which category), extractor (which fields),
+research (what to know before the interview). The notifier and tracker are not
+agents; they push and persist what the agents decide.
+
+Research uses Gemini's built-in Google Search grounding rather than a separate
+search API, so there is no extra key. The cost is that it draws on the same
+per-model daily Gemini allowance as routing and extraction. If that becomes
+the binding constraint, moving search to a dedicated provider such as Tavily
+only changes the one call inside `core/research_agent.py`.
 
 - Router: 10/10 on the labelled sample corpus.
 - Tracker: verified against a real spreadsheet — two roles at one employer

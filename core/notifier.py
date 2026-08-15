@@ -38,6 +38,7 @@ MAX_ATTEMPTS = 3
 # only field that can realistically approach that.
 MAX_MESSAGE_CHARS = 4096
 BRIEF_BUDGET = 1200
+MAX_SOURCES_SHOWN = 4
 
 # Which statuses are worth interrupting someone for. Acknowledgements are the
 # bulk of the volume and carry no news — they still land in the tracker, they
@@ -150,6 +151,15 @@ def build_message(
         if len(brief) > BRIEF_BUDGET:
             brief = brief[:BRIEF_BUDGET].rsplit(" ", 1)[0] + "…"
         lines += ["", "<b>Prep brief</b>", _esc(brief)]
+
+        if research_brief.sources:
+            # A brief the reader might repeat to an interviewer has to be
+            # checkable. Only a few fit before the message gets unreadable.
+            lines += ["", "<b>Sources</b>"]
+            lines += [_esc(source) for source in research_brief.sources[:MAX_SOURCES_SHOWN]]
+        else:
+            # Say so rather than let unsourced recall look researched.
+            lines += ["", "<i>No sources found — treat as unverified.</i>"]
 
     lines += ["", f"<i>{_esc(email.subject[:120])}</i>"]
 

@@ -288,3 +288,103 @@ async def generate_json(
             await asyncio.sleep(delay)
 
     raise RuntimeError(f"Gemini failed after {MAX_ATTEMPTS} attempts") from last_error
+
+
+class GroundedText(BaseModel):
+    """Free-text answer plus the pages the model actually consulted."""
+
+    text: str
+    sources: list[str] = []
+
+
+def _extract_sources(response) -> list[str]:
+    """Pull deduplicated source URLs out of grounding metadata.
+
+    Best-effort: grounding metadata is absent whenever the model chose not to
+    search, and the shape has moved between SDK versions, so a missing field
+    means "no citations", never an error.
+    """
+    seen: list[str] = []
+    for candidate in getattr(response, "candidates", None) or []:
+        metadata = getattr(candidate, "grounding_metadata", None)
+        for chunk in getattr(metadata, "grounding_chunks", None) or []:
+            web = getattr(chunk, "web", None)
+            uri = getattr(web, "uri", None)
+            if not uri:
+                continue
+            title = (getattr(web, "title", None) or getattr(web, "domain", None) or "").strip()
+            entry = f"{title} — {uri}" if title else uri
+            if entry not in seen:
+                seen.append(entry)
+    return seen
+
+
+async def generate_grounded_text(
+    settings: Settings,
+    *,
+    system_instruction: str,
+    prompt: str,
+    max_output_tokens: int = 2048,
+) -> GroundedText:
+    """Answer a question with Google Search grounding, returning prose.
+
+    Deliberately not generate_json. Grounding and structured output can be
+    combined on current models, but the citations come back empty when they
+    are, and this call's output is one block of prose anyway — a schema would
+    buy nothing and cost the sources.
+
+    Thinking is left at the model's default too: unlike routing and
+    extraction, synthesising several search results is exactly the kind of
+    work reasoning tokens help with, and the output is prose, so there is no
+    empty-JSON failure mode to guard against.
+    """
+    _raise_if_daily_quota_spent()
+
+    client = build_client(settings)
+    limiter = get_limiter()
+
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        max_output_tokens=max_output_tokens,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        _raise_if_daily_quota_spent()
+        await limiter.acquire()
+        try:
+            response = await client.aio.models.generate_content(
+                model=default_model(), contents=prompt, config=config
+            )
+        except errors.APIError as exc:
+            daily = DAILY_QUOTA_RE.search(str(exc))
+            if daily:
+                globals()["_daily_quota_hit"] = daily.group(1)
+                raise DailyQuotaExceeded(
+                    f"Daily free-tier quota exhausted for {default_model()!r} "
+                    f"({daily.group(1)}). Grounded search draws on the same "
+                    "per-model allowance as routing and extraction. Either set "
+                    "GEMINI_MODEL to a different model, or move research onto a "
+                    "separate search provider."
+                ) from exc
+
+            if exc.code not in RETRYABLE_STATUS or attempt == MAX_ATTEMPTS:
+                raise
+            last_error = exc
+            delay = _server_retry_delay(exc) or 2 ** (attempt - 1)
+            delay = min(delay, MAX_RETRY_DELAY_S) + random.uniform(0, 1)
+            logger.warning(
+                "Gemini %s on grounded call, retrying in %.1fs (attempt %d/%d)",
+                exc.code, delay, attempt, MAX_ATTEMPTS,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        text = (response.text or "").strip()
+        if not text:
+            finish = response.candidates[0].finish_reason if response.candidates else None
+            raise RuntimeError(f"Gemini returned no text (finish_reason={finish})")
+        return GroundedText(text=text, sources=_extract_sources(response))
+
+    raise RuntimeError(f"Gemini failed after {MAX_ATTEMPTS} attempts") from last_error
