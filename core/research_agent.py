@@ -22,7 +22,7 @@ Both paths end at the same ResearchBrief, so callers never learn which ran.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from core import gemini, search
 from core.config import Settings
@@ -57,6 +57,10 @@ Rules:
 useful; a confident guess is dangerous, because the reader may repeat it to \
 an interviewer.
 - No preamble, no sign-off, no restating the request. Start with the bullets.
+- Today's date is given in the prompt. Use it. Search results are undated \
+snapshots, so without checking you will describe a passed event as upcoming — \
+"they are scheduled to report on 11 February" when February was months ago. \
+Put past events in the past tense, and skip anything too old to be news.
 - Prefer the last 12 months. An old funding round presented as news is worse \
 than no news at all.
 - Plain text bullets only. No markdown headers, bold, or tables — this is \
@@ -64,22 +68,32 @@ delivered in a Telegram message.\
 """
 
 
-def _prompt(company: str, role: str) -> str:
+def _prompt(company: str, role: str, today: date | None = None) -> str:
     # Role is included because interview format differs sharply between
     # engineering, quant and analyst tracks at the same employer.
+    #
+    # The date is included because search extracts carry no reliable timestamp,
+    # so the model has no way to tell a forthcoming event from one that has
+    # already happened — it reported a February results announcement as
+    # upcoming in August.
+    today = today or date.today()
     return (
+        f"Today's date: {today:%d %B %Y}\n"
         f"Company: {company}\n"
         f"Role the student is interviewing for: {role}\n\n"
         f"Research {company} and write the briefing."
     )
 
 
-def search_queries(company: str, role: str) -> list[str]:
+def search_queries(company: str, role: str, today: date | None = None) -> list[str]:
     """The three searches the brief is built from, one per section that needs
     external facts. Culture and interview format are separate queries because
     a single "tell me about X" search returns marketing copy for both."""
+    today = today or date.today()
     return [
-        f"{company} news announcement 2026",
+        # The year is computed, not written in. A hardcoded one silently
+        # narrows to stale results as soon as the calendar moves on.
+        f"{company} news announcement {today.year}",
         f"{company} {role} interview process rounds candidate experience",
         f"{company} company values culture careers",
     ]
