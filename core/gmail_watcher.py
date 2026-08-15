@@ -43,8 +43,14 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 DEFAULT_LOOKBACK_DAYS = 1
 
 # Cap per run so a first run against a busy mailbox can't fan out into
-# hundreds of downstream Gemini calls.
+# hundreds of downstream Gemini calls. It defers work rather than dropping it:
+# the oldest messages are processed first and the cursor advances only past
+# those, so a backlog drains over successive runs.
 DEFAULT_MAX_MESSAGES = 25
+
+# Safety stop when listing message ids. Ids are cheap, but an unbounded loop
+# over a mailbox with a very old cursor would still stall a cron run.
+MAX_LIST_PAGES = 10
 
 
 def _lookback() -> timedelta:
@@ -66,7 +72,7 @@ def _max_messages() -> int:
 #
 # This is a recall/cost trade-off, not a free win: recruiting mail sent
 # through marketing infrastructure can land in Promotions, and excluding the
-# tab would miss it. Set GMAIL_QUERY_FILTER to "" to search everything.
+# tab would miss it. Set GMAIL_QUERY_FILTER to "none" to search everything.
 DEFAULT_QUERY_FILTER = "-category:promotions -category:social"
 
 
@@ -186,25 +192,41 @@ def _fetch_sync(settings: Settings, cursor: str | None) -> tuple[list[Email], st
         query = f"{query} {query_filter}"
     logger.info("Gmail query: %s", query)
 
-    listing = (
-        service.users()
-        .messages()
-        .list(
-            userId="me",
-            q=query,
-            maxResults=max_messages,
+    # List every id in the window before deciding which to process. Ids are
+    # cheap — one request per 500, no message bodies — and this is what lets
+    # the cap defer work rather than lose it.
+    stubs: list[dict] = []
+    page_token = None
+    for _ in range(MAX_LIST_PAGES):
+        listing = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=500, pageToken=page_token)
+            .execute()
         )
-        .execute()
-    )
-
-    stubs = listing.get("messages", [])
-    if len(stubs) >= max_messages:
-        # Worth saying out loud: the cursor advances past everything fetched,
-        # so mail beyond the cap in this window is skipped, not deferred.
+        stubs.extend(listing.get("messages", []))
+        page_token = listing.get("nextPageToken")
+        if not page_token:
+            break
+    else:
         logger.warning(
-            "Hit the %d-message cap — older mail in this window will be skipped. "
-            "Raise GMAIL_MAX_MESSAGES to widen it.",
-            max_messages,
+            "Stopped listing after %d pages; the backlog is larger than this "
+            "run can see. It will drain over subsequent runs.",
+            MAX_LIST_PAGES,
+        )
+
+    # Gmail returns newest first. Take the OLDEST slice, not the newest: the
+    # cursor advances only to the newest message actually processed, so
+    # whatever is left is still ahead of it and arrives on the next run. Taking
+    # the newest instead would jump the cursor over the remainder and lose it —
+    # silently dropping an interview invite sitting behind a burst of mail.
+    backlog = len(stubs)
+    if backlog > max_messages:
+        stubs = stubs[-max_messages:]
+        logger.info(
+            "%d message(s) waiting; processing the oldest %d this run, "
+            "the rest follow next run.",
+            backlog, max_messages,
         )
 
     emails: list[Email] = []
