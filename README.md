@@ -78,11 +78,15 @@ mail later.
 
 ## Status
 
-Stage 7 complete. Gmail watcher, router, extractor, Google Sheets tracker and
-Telegram push notifications run end to end, and the research agent produces a
-prep brief for a single company. Stage 8 — fanning research out across many
-companies from `run_once` — and the bot's on-demand query side (`bot/app.py`)
-are still to do.
+Stage 8 complete. The whole pipeline runs end to end: watch -> route ->
+extract -> research (parallel, interviews only) -> track -> notify. The bot's
+on-demand query side (`bot/app.py`) is the remaining stub.
+
+Research fans out with `asyncio.gather`, one independent agent per company,
+and is filtered three ways so it stays cheap: interviews only, one brief per
+company however many emails mention it, and nothing already briefed in the
+sheet. A research failure degrades that notification's brief without costing
+the row or the alert.
 
 Three LLM agents so far: router (which category), extractor (which fields),
 research (what to know before the interview). The notifier and tracker are not

@@ -45,6 +45,19 @@ SAFETY_MARGIN = 200
 # that has to survive intact for the link to work.
 MAX_SOURCE_TITLE = 60
 
+# Section labels the research agent is instructed to emit. Rendered as bold
+# headings so a brief scanned on a phone has visible structure rather than
+# five undifferentiated bullet groups.
+BRIEF_SECTIONS = frozenset(
+    {
+        "WHAT THEY DO",
+        "RECENT NEWS",
+        "INTERVIEW PROCESS",
+        "WHAT THEY VALUE",
+        "QUESTIONS TO ASK",
+    }
+)
+
 # Which statuses are worth interrupting someone for. Acknowledgements are the
 # bulk of the volume and carry no news — they still land in the tracker, they
 # just do not buzz a phone. Override with NOTIFY_STATUSES as a comma-separated
@@ -128,6 +141,28 @@ def _esc(text: str) -> str:
     return html.escape(text or "", quote=False)
 
 
+def _format_brief(text: str) -> str:
+    """Bold the research agent's section labels, escaping everything else.
+
+    The agent is asked to emit fixed labels on their own lines. Matching them
+    here rather than having the model emit HTML keeps the sheet copy readable
+    and means a model that drifts off the format degrades to plain text
+    instead of leaking broken tags into the message.
+    """
+    rendered = []
+    for line in text.strip().splitlines():
+        stripped = line.strip()
+        if stripped.rstrip(":").upper() in BRIEF_SECTIONS:
+            # Blank line before each heading except the first, so the sections
+            # separate visually in a Telegram bubble.
+            if rendered:
+                rendered.append("")
+            rendered.append(f"<b>{_esc(stripped.rstrip(':').title())}</b>")
+        elif stripped:
+            rendered.append(_esc(stripped))
+    return "\n".join(rendered)
+
+
 def _truncate_escaped(text: str, limit: int) -> str:
     """Shorten already-escaped text without splitting an HTML entity.
 
@@ -207,7 +242,7 @@ def build_message(
         # five characters — so budgeting against the raw length can still
         # overflow, and the blind cut that follows could land inside an entity
         # and make Telegram reject the whole message as malformed HTML.
-        brief = _truncate_escaped(_esc(research_brief.brief_text.strip()), available)
+        brief = _truncate_escaped(_format_brief(research_brief.brief_text), available)
 
         lines += ["", "<b>Prep brief</b>", brief] + source_lines
 

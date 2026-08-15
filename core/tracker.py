@@ -82,6 +82,16 @@ def _tokens(text: str, noise: set[str]) -> list[str]:
     return [w for w in words if w and w not in noise and not w.isdigit()]
 
 
+def company_key(company: str) -> frozenset[str]:
+    """Identity of an employer, ignoring legal suffixes and word order.
+
+    Shared by the tracker's matching and by run_once's research fan-out, so
+    "Grab" and "Grab Holdings" are one company in both places. Two rows would
+    otherwise each trigger their own research call for the same employer.
+    """
+    return frozenset(_tokens(company, COMPANY_NOISE))
+
+
 def _same_application(
     company_a: str, role_a: str, company_b: str, role_b: str
 ) -> bool:
@@ -136,8 +146,12 @@ def _build_row(
     extracted: ExtractedDetails,
     email: Email,
     existing: list[str] | None = None,
+    research_brief: ResearchBrief | None = None,
 ) -> list[str]:
     prior_brief = _cell(existing, "research_brief") if existing else ""
+    # A freshly researched brief supersedes an older one, but a run without
+    # research must never blank out a brief already in the sheet.
+    brief_text = research_brief.brief_text if research_brief else prior_brief
     prior_date = _cell(existing, "key_date") if existing else ""
     prior_status = _cell(existing, "status") if existing else ""
 
@@ -154,7 +168,7 @@ def _build_row(
     row[COL["category"]] = category.value
     row[COL["key_date"]] = key_date
     row[COL["status"]] = status.value
-    row[COL["research_brief"]] = prior_brief
+    row[COL["research_brief"]] = brief_text
     row[COL["source"]] = email.message_id
     row[COL["logged_at"]] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return row
@@ -180,7 +194,11 @@ async def ensure_ready(settings: Settings) -> None:
 
 
 async def upsert_row(
-    settings: Settings, category: Category, extracted: ExtractedDetails, email: Email
+    settings: Settings,
+    category: Category,
+    extracted: ExtractedDetails,
+    email: Email,
+    research_brief: ResearchBrief | None = None,
 ) -> bool:
     """Create the application's row, or update it in place if it exists.
 
@@ -196,7 +214,10 @@ async def upsert_row(
                 extracted.company, extracted.role,
             ):
                 sheet_row = offset + 2  # 1-based, and row 1 is the header
-                updated = _build_row(category, extracted, email, existing=row)
+                updated = _build_row(
+                    category, extracted, email, existing=row,
+                    research_brief=research_brief,
+                )
                 last_col = chr(ord("A") + len(TRACKER_COLUMNS) - 1)
                 await sheets.update_values(
                     settings,
@@ -211,7 +232,9 @@ async def upsert_row(
                 return False
 
         await sheets.append_values(
-            settings, sheets.APPLICATIONS_TAB, [_build_row(category, extracted, email)]
+            settings,
+            sheets.APPLICATIONS_TAB,
+            [_build_row(category, extracted, email, research_brief=research_brief)],
         )
         logger.info(
             "Added application: %s / %s (%s)",
@@ -253,3 +276,19 @@ async def attach_research_brief(
 
 async def query(settings: Settings, natural_language_question: str) -> str:
     raise NotImplementedError("Stage 10: read tracker rows and answer NL queries")
+
+
+async def companies_with_briefs(settings: Settings) -> set[frozenset[str]]:
+    """Company keys that already have a research brief in the sheet.
+
+    Used to skip re-researching an employer already briefed. Interview threads
+    run to several emails — invitation, reschedule, confirmation — and each
+    would otherwise spend three searches and a Gemini call rewriting a brief
+    the reader already has.
+    """
+    rows = await _load_rows(settings)
+    return {
+        company_key(_cell(row, "company"))
+        for row in rows
+        if _cell(row, "research_brief") and _cell(row, "company")
+    }
