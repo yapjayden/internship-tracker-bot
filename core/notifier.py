@@ -211,6 +211,11 @@ def build_message(
         _esc(extracted.role),
     ]
 
+    if extracted.department:
+        # Its own line, because at a large employer the unit is what tells two
+        # otherwise identical applications apart.
+        lines.append(f"🏢 {_esc(extracted.department)}")
+
     if extracted.key_date:
         lines.append(f"🗓 {_esc(format_key_date(extracted.key_date))}")
 

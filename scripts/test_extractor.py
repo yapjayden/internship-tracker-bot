@@ -39,6 +39,18 @@ def _check(details: ExtractedDetails, expected) -> list[str]:
             f"status {details.status.value!r}, wanted {expected.status.value!r}"
         )
 
+    got_department = (details.department or "").strip().lower()
+    if expected.department_contains:
+        if expected.department_contains not in got_department:
+            problems.append(
+                f"department {details.department!r}, wanted to contain "
+                f"{expected.department_contains!r}"
+            )
+    elif got_department:
+        # A hallucinated unit is worse than none: it splits one application
+        # into two rows and spends a research call on a team that may not exist.
+        problems.append(f"department {details.department!r}, wanted none")
+
     got_date = details.key_date.date() if details.key_date else None
     if got_date != expected.key_date and not (
         expected.key_date_optional and got_date in (None, expected.key_date)
@@ -89,8 +101,9 @@ async def run_samples(limit: int | None) -> None:
         if not problems:
             clean += 1
             print(
-                f"  ok     {email.message_id}  {result.company} / {result.role} "
-                f"/ {result.status.value} / {result.key_date}"
+                f"  ok     {email.message_id}  {result.company}"
+                f"{' / ' + result.department if result.department else ''}"
+                f" / {result.role} / {result.status.value} / {result.key_date}"
             )
             continue
 

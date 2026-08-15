@@ -34,9 +34,11 @@ from core.models import (
 
 logger = logging.getLogger(__name__)
 
-# company | role | category | key_date | status | research_brief | source | logged_at
+# company | department | role | category | key_date | status | research_brief
+#         | source | logged_at
 TRACKER_COLUMNS = [
     "company",
+    "department",
     "role",
     "category",
     "key_date",
@@ -54,6 +56,14 @@ COMPANY_NOISE = {
     "pte", "ltd", "limited", "inc", "incorporated", "llc", "plc", "corp",
     "corporation", "company", "co", "holdings", "holding", "group", "technologies",
     "technology", "labs", "sg", "singapore", "asia", "global", "international",
+}
+
+# Words that appear in a department name without distinguishing one unit from
+# another. "Team" and "Division" are pure scaffolding; the company's own name
+# is dropped because units are usually written with it ("Shopee Mall").
+DEPARTMENT_NOISE = {
+    "team", "department", "dept", "division", "unit", "business", "group",
+    "the", "of", "and", "at", "in", "by", "for",
 }
 
 # Words that appear in role titles without distinguishing one role from
@@ -92,18 +102,75 @@ def company_key(company: str) -> frozenset[str]:
     return frozenset(_tokens(company, COMPANY_NOISE))
 
 
-def _same_application(
-    company_a: str, role_a: str, company_b: str, role_b: str
+def department_tokens(company: str, department: str | None) -> frozenset[str]:
+    """The words that actually distinguish one business unit from another.
+
+    The employer's own name is removed. Units are usually written with it —
+    "Shopee Mall", "Fulfilled by Shopee" — and leaving it in makes every unit
+    at a company overlap on that one token, which is exactly the false match
+    this function exists to prevent.
+    """
+    return frozenset(_tokens(department or "", DEPARTMENT_NOISE)) - frozenset(
+        _tokens(company, COMPANY_NOISE)
+    )
+
+
+def same_department(
+    company_a: str, department_a: str | None,
+    company_b: str, department_b: str | None,
 ) -> bool:
-    """Decide whether two (company, role) pairs are the same application.
+    """Whether two department strings name the same business unit.
+
+    A named unit and an unnamed one are treated as the same application: the
+    first email in a thread often omits the unit a later one states, and
+    splitting one application in two is worse than merging those.
+
+    Two *different* named units never match. Shopee's FBS and Shopee Mall hire
+    and interview separately, so collapsing them would fuse unrelated
+    processes into one row and give one of them the other's brief.
+    """
+    ta = department_tokens(company_a, department_a)
+    tb = department_tokens(company_b, department_b)
+    if not ta or not tb:
+        return True
+    # Overlap rather than equality, so "FBS" matches "Fulfilled by Shopee
+    # (FBS)" — the extractor is asked to emit both forms for exactly this.
+    return bool(ta & tb)
+
+
+def department_key(company: str, department: str | None) -> tuple:
+    """Research identity: an employer plus, if known, its business unit.
+
+    Distinct from company_key because a brief on Shopee Mall is not a brief on
+    Fulfilled by Shopee. Deduping research by company alone would give one of
+    them the other's briefing.
+
+    Exact-equality key, so it cannot recognise "FBS" and "Fulfilled by Shopee
+    (FBS)" as one unit — same_department does that. Callers that need the
+    looser notion must group with same_department rather than rely on this.
+    """
+    return (company_key(company), department_tokens(company, department))
+
+
+def _same_application(
+    company_a: str, role_a: str, company_b: str, role_b: str,
+    department_a: str | None = None, department_b: str | None = None,
+) -> bool:
+    """Decide whether two applications are the same.
 
     Company must match on its distinguishing words — that is the hard
     constraint, since merging two employers is far worse than splitting one.
-    Role is compared loosely, because "Software Engineer Intern (Summer 2027)"
-    and "Software Engineering Intern" are the same job.
+    Department must not contradict: two differently named units at one company
+    are separate applications even when the role title is identical, because
+    "Operations Intern" at Shopee Mall and at FBS are different jobs run by
+    different teams. Role is compared loosely, because "Software Engineer
+    Intern (Summer 2027)" and "Software Engineering Intern" are the same job.
     """
     ca, cb = _tokens(company_a, COMPANY_NOISE), _tokens(company_b, COMPANY_NOISE)
     if not ca or not cb or set(ca) != set(cb):
+        return False
+
+    if not same_department(company_a, department_a, company_b, department_b):
         return False
 
     ra, rb = set(_tokens(role_a, ROLE_NOISE)), set(_tokens(role_b, ROLE_NOISE))
@@ -164,6 +231,10 @@ def _build_row(
 
     row = [""] * len(TRACKER_COLUMNS)
     row[COL["company"]] = extracted.company
+    # Keep a unit we already knew if a later email omits it.
+    row[COL["department"]] = extracted.department or (
+        _cell(existing, "department") if existing else ""
+    )
     row[COL["role"]] = extracted.role
     row[COL["category"]] = category.value
     row[COL["key_date"]] = key_date
@@ -212,6 +283,7 @@ async def upsert_row(
             if _same_application(
                 _cell(row, "company"), _cell(row, "role"),
                 extracted.company, extracted.role,
+                _cell(row, "department"), extracted.department,
             ):
                 sheet_row = offset + 2  # 1-based, and row 1 is the header
                 updated = _build_row(
@@ -278,17 +350,22 @@ async def query(settings: Settings, natural_language_question: str) -> str:
     raise NotImplementedError("Stage 10: read tracker rows and answer NL queries")
 
 
-async def companies_with_briefs(settings: Settings) -> set[frozenset[str]]:
-    """Company keys that already have a research brief in the sheet.
+async def companies_with_briefs(settings: Settings) -> list[tuple[str, str]]:
+    """(company, department) pairs that already have a research brief.
 
-    Used to skip re-researching an employer already briefed. Interview threads
-    run to several emails — invitation, reschedule, confirmation — and each
-    would otherwise spend three searches and a Gemini call rewriting a brief
-    the reader already has.
+    Used to skip re-researching a unit already briefed. Interview threads run
+    to several emails — invitation, reschedule, confirmation — and each would
+    otherwise spend three searches and a Gemini call rewriting a brief the
+    reader already has.
+
+    Returns the raw strings rather than keys so callers can compare with
+    same_department. A sheet row saying "FBS" and a new email saying
+    "Fulfilled by Shopee (FBS)" are one unit, and exact key equality would
+    miss that and research it again.
     """
     rows = await _load_rows(settings)
-    return {
-        company_key(_cell(row, "company"))
+    return [
+        (_cell(row, "company"), _cell(row, "department"))
         for row in rows
         if _cell(row, "research_brief") and _cell(row, "company")
-    }
+    ]

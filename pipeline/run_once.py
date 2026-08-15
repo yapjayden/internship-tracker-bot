@@ -26,10 +26,32 @@ logger = logging.getLogger(__name__)
 CURSOR_KEY = "gmail"
 
 
+def _brief_for(
+    briefs: dict[tuple, ResearchBrief], company: str, department: str | None
+) -> ResearchBrief | None:
+    """Find the brief for an application, tolerating unit-name variants.
+
+    The exact key usually hits. It misses when this email spells the unit
+    differently from the one the group was stored under — "FBS" against
+    "Fulfilled by Shopee (FBS)" — so fall back to the same matching rule the
+    grouping used.
+    """
+    exact = briefs.get(tracker.department_key(company, department))
+    if exact is not None:
+        return exact
+
+    for (company_tokens, _), brief in briefs.items():
+        if company_tokens != tracker.company_key(company):
+            continue
+        if tracker.same_department(company, brief.department, company, department):
+            return brief
+    return None
+
+
 async def research_interviews(
     settings: Settings,
     extracted: list[tuple[Email, Category, ExtractedDetails]],
-) -> dict[frozenset[str], ResearchBrief]:
+) -> dict[tuple, ResearchBrief]:
     """Research every company with a new interview, all at once.
 
     Returns briefs keyed by company rather than by email, because the mapping
@@ -40,19 +62,37 @@ async def research_interviews(
 
     - Interviews only. An assessment invitation needs a deadline, not a
       briefing on company culture.
-    - One brief per company, by tracker.company_key, so "Grab" and "Grab
-      Holdings" in the same batch research once.
+    - One brief per company *and business unit*, by tracker.department_key, so
+      "Grab" and "Grab Holdings" research once while Shopee Mall and Fulfilled
+      by Shopee stay apart.
     - Nothing already briefed in the sheet. An interview thread runs to
       several emails — invitation, reschedule, confirmation — and each would
       otherwise redo three searches and a Gemini call.
     """
-    wanted: dict[frozenset[str], tuple[str, str]] = {}
+    # Grouped with same_department rather than by dict key, because the key is
+    # exact and two spellings of one unit are common: an invitation says
+    # "Fulfilled by Shopee (FBS)" and the reschedule says "FBS". Keyed
+    # deduplication would research that unit twice.
+    groups: list[tuple[str, str, str | None]] = []
     for _, category, details in extracted:
         if category != Category.INTERVIEW:
             continue
-        wanted.setdefault(
-            tracker.company_key(details.company), (details.company, details.role)
+        merged = any(
+            tracker.company_key(company) == tracker.company_key(details.company)
+            and tracker.same_department(
+                company, department, details.company, details.department
+            )
+            for company, _, department in groups
         )
+        if not merged:
+            groups.append((details.company, details.role, details.department))
+
+    # Keyed for lookup afterwards. Every email's own key must resolve, so the
+    # map holds each group under the fullest spelling seen for it.
+    wanted: dict[tuple, tuple[str, str, str | None]] = {
+        tracker.department_key(company, department): (company, role, department)
+        for company, role, department in groups
+    }
 
     if not wanted:
         return {}
@@ -63,9 +103,20 @@ async def research_interviews(
         # Not fatal: researching again costs quota, skipping the whole step
         # costs the feature. Prefer the brief.
         logger.warning("Could not read existing briefs (%s); researching all", exc)
-        already = set()
+        already = []
 
-    todo = {key: value for key, value in wanted.items() if key not in already}
+    def _briefed(company: str, department: str | None) -> bool:
+        return any(
+            tracker.company_key(done_company) == tracker.company_key(company)
+            and tracker.same_department(done_company, done_dept, company, department)
+            for done_company, done_dept in already
+        )
+
+    todo = {
+        key: value
+        for key, value in wanted.items()
+        if not _briefed(value[0], value[2])
+    }
     skipped = len(wanted) - len(todo)
     if skipped:
         logger.info("Skipping %d company/companies already briefed", skipped)
@@ -79,14 +130,14 @@ async def research_interviews(
     # limiter, and Tavily's free pool is generous relative to a single batch.
     results = await asyncio.gather(
         *(
-            research_agent.research_company(settings, company, role)
-            for company, role in todo.values()
+            research_agent.research_company(settings, company, role, department)
+            for company, role, department in todo.values()
         ),
         return_exceptions=True,
     )
 
-    briefs: dict[frozenset[str], ResearchBrief] = {}
-    for key, (company, _), result in zip(todo.keys(), todo.values(), results):
+    briefs: dict[tuple, ResearchBrief] = {}
+    for key, (company, _, _), result in zip(todo.keys(), todo.values(), results):
         if isinstance(result, BaseException):
             # A missing brief degrades the notification; it must not cost the
             # interview row or the alert that an interview exists at all.
@@ -153,7 +204,7 @@ async def run() -> None:
     briefs = await research_interviews(settings, extracted)
 
     for email, category, details in extracted:
-        brief = briefs.get(tracker.company_key(details.company))
+        brief = _brief_for(briefs, details.company, details.department)
         try:
             # Serialised inside the tracker: concurrent upserts for the same
             # application would otherwise each append their own row. The brief

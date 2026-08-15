@@ -82,11 +82,17 @@ Stage 8 complete. The whole pipeline runs end to end: watch -> route ->
 extract -> research (parallel, interviews only) -> track -> notify. The bot's
 on-demand query side (`bot/app.py`) is the remaining stub.
 
-Research fans out with `asyncio.gather`, one independent agent per company,
-and is filtered three ways so it stays cheap: interviews only, one brief per
-company however many emails mention it, and nothing already briefed in the
-sheet. A research failure degrades that notification's brief without costing
-the row or the alert.
+Research fans out with `asyncio.gather`, one independent agent per company
+*and business unit*, filtered three ways so it stays cheap: interviews only,
+one brief per unit however many emails mention it, and nothing already briefed
+in the sheet. A research failure degrades that notification's brief without
+costing the row or the alert.
+
+Business units are first-class. Shopee runs Fulfilled by Shopee (FBS), Shopee
+Mall and Shopee Supported Logistics as separate operations that hire and
+interview separately, so they get separate tracker rows and separate briefs. A
+unit named in one email and omitted in the next is still one application; two
+differently named units never merge.
 
 Three LLM agents so far: router (which category), extractor (which fields),
 research (what to know before the interview). The notifier and tracker are not

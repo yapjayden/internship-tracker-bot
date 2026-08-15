@@ -145,9 +145,34 @@ async def ensure_tabs(settings: Settings, headers: dict[str, list[str]]) -> None
     # rather than assuming creation and headers happen together.
     for title, header in headers.items():
         rows = await get_values(settings, f"{title}!A1:Z1")
-        if not rows or not any(cell.strip() for cell in rows[0]):
+        existing_header = [cell.strip() for cell in rows[0]] if rows else []
+
+        if not any(existing_header):
             await update_values(settings, f"{title}!A1", [header])
             logger.info("Wrote header row for %s", title)
+            continue
+
+        if existing_header == header:
+            continue
+
+        # The schema gained a column. Rewriting row 1 keeps new writes correct,
+        # but any pre-existing data rows were written against the old column
+        # order and are now misaligned from the insertion point onward. That
+        # cannot be repaired safely from here without guessing, so say so
+        # loudly rather than silently producing a scrambled sheet.
+        data = await get_values(settings, f"{title}!A2:A")
+        await update_values(settings, f"{title}!A1", [header])
+        logger.warning(
+            "Header for %r changed from %s to %s.", title, existing_header, header
+        )
+        if any(cell for row in data for cell in row):
+            logger.warning(
+                "%r already holds %d data row(s) written against the old "
+                "columns. Values from the changed column onward will be "
+                "shifted. Delete those rows and re-run, or realign them by "
+                "hand.",
+                title, len(data),
+            )
 
 
 async def get_values(settings: Settings, range_: str) -> list[list[str]]:

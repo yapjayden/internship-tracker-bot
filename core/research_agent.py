@@ -80,7 +80,17 @@ delivered in a Telegram message.\
 """
 
 
-def _prompt(company: str, role: str, today: date | None = None) -> str:
+def _subject(company: str, department: str | None) -> str:
+    """How to refer to the employer throughout. A department changes what the
+    brief should be about: Fulfilled by Shopee and Shopee Mall run different
+    operations and different interviews, so a brief on "Shopee" would be
+    accurate and useless."""
+    return f"{company} — {department}" if department else company
+
+
+def _prompt(
+    company: str, role: str, department: str | None = None, today: date | None = None
+) -> str:
     # Role is included because interview format differs sharply between
     # engineering, quant and analyst tracks at the same employer.
     #
@@ -89,24 +99,40 @@ def _prompt(company: str, role: str, today: date | None = None) -> str:
     # already happened — it reported a February results announcement as
     # upcoming in August.
     today = today or date.today()
+    unit = (
+        f"Business unit: {department}\n"
+        "Write about this unit specifically. Company-wide facts are only worth "
+        "including where they bear on it.\n"
+        if department
+        else ""
+    )
     return (
         f"Today's date: {today:%d %B %Y}\n"
         f"Company: {company}\n"
+        f"{unit}"
         f"Role the student is interviewing for: {role}\n\n"
-        f"Research {company} and write the briefing."
+        f"Research {_subject(company, department)} and write the briefing."
     )
 
 
-def search_queries(company: str, role: str, today: date | None = None) -> list[str]:
+def search_queries(
+    company: str, role: str, department: str | None = None, today: date | None = None
+) -> list[str]:
     """The three searches the brief is built from, one per section that needs
     external facts. Culture and interview format are separate queries because
-    a single "tell me about X" search returns marketing copy for both."""
+    a single "tell me about X" search returns marketing copy for both.
+
+    With a department, the news query narrows to that unit while values stays
+    company-wide: business units rarely publish their own values, and a
+    unit-scoped values search returns nothing.
+    """
     today = today or date.today()
+    subject = _subject(company, department)
     return [
         # The year is computed, not written in. A hardcoded one silently
         # narrows to stale results as soon as the calendar moves on.
-        f"{company} news announcement {today.year}",
-        f"{company} {role} interview process rounds candidate experience",
+        f"{subject} news announcement {today.year}",
+        f"{subject} {role} interview process rounds candidate experience",
         f"{company} company values culture careers",
     ]
 
@@ -130,17 +156,20 @@ def _render_results(results: list[search.SearchResult], budget: int = 6000) -> s
 
 
 async def _brief_via_tavily(
-    settings: Settings, company: str, role: str
+    settings: Settings, company: str, role: str, department: str | None
 ) -> tuple[str, list[str]]:
-    results = await search.search_many(settings, search_queries(company, role))
+    results = await search.search_many(
+        settings, search_queries(company, role, department)
+    )
     if not results:
         raise RuntimeError(
-            f"No search results for {company}. Check TAVILY_API_KEY and its "
+            f"No search results for {_subject(company, department)}. Check "
+            "TAVILY_API_KEY and its "
             "remaining monthly quota at https://app.tavily.com"
         )
 
     prompt = (
-        f"{_prompt(company, role)}\n\n"
+        f"{_prompt(company, role, department)}\n\n"
         "Use only the search results below. If they do not support a section, "
         "write \"not found\" for it.\n\n"
         "SEARCH RESULTS\n"
@@ -161,44 +190,46 @@ async def _brief_via_tavily(
 
 
 async def _brief_via_grounding(
-    settings: Settings, company: str, role: str
+    settings: Settings, company: str, role: str, department: str | None
 ) -> tuple[str, list[str]]:
     generated = await gemini.generate_grounded_text(
         settings,
         system_instruction=SYSTEM_INSTRUCTION,
-        prompt=_prompt(company, role),
+        prompt=_prompt(company, role, department),
         max_output_tokens=2048,
     )
     return generated.text, generated.sources
 
 
 async def research_company(
-    settings: Settings, company: str, role: str
+    settings: Settings, company: str, role: str, department: str | None = None
 ) -> ResearchBrief:
     """Produce one prep brief. Raises on failure; callers decide the policy."""
     if search.is_configured(settings):
-        text, sources = await _brief_via_tavily(settings, company, role)
+        text, sources = await _brief_via_tavily(settings, company, role, department)
     else:
         logger.info(
             "TAVILY_API_KEY not set; using Gemini search grounding, which draws "
             "on the same request quota as routing and extraction."
         )
-        text, sources = await _brief_via_grounding(settings, company, role)
+        text, sources = await _brief_via_grounding(settings, company, role, department)
 
+    subject = _subject(company, department)
     if not sources:
         # Worth flagging rather than hiding: with no sources the model answered
         # from training data, which for "recent developments" is exactly where
         # it is least reliable.
         logger.warning(
-            "No sources for %s — brief is unverified model recall", company
+            "No sources for %s — brief is unverified model recall", subject
         )
 
     logger.info(
-        "Researched %s (%d chars, %d source(s))", company, len(text), len(sources)
+        "Researched %s (%d chars, %d source(s))", subject, len(text), len(sources)
     )
 
     return ResearchBrief(
         company=company,
+        department=department,
         brief_text=text,
         generated_at=datetime.now(timezone.utc),
         sources=sources[:MAX_SOURCES],

@@ -148,6 +148,19 @@ SAMPLES: list[tuple[Email, Category]] = [
         ),
         Category.OTHER,
     ),
+    (
+        _email(
+            "s11",
+            "campus@shopee.com",
+            "Interview — Operations Intern, Fulfilled by Shopee",
+            "Hi Jayden,\n\nThanks for applying to the Operations Intern role with "
+            "Fulfilled by Shopee (FBS), our end-to-end fulfilment arm. We would like "
+            "to invite you to a 45-minute interview with the FBS regional operations "
+            "team.\n\nPlease confirm your availability by 5 August 2026.\n\n"
+            "Shopee Campus Recruitment",
+        ),
+        Category.INTERVIEW,
+    ),
 ]
 
 
@@ -174,6 +187,9 @@ class ExtractionExpectation:
     # Set where the email implies a date without committing to one, so either
     # answer is defensible.
     key_date_optional: bool = False
+    # Lowercase substring the extracted department must contain. None means
+    # the email names no business unit and the field should stay empty.
+    department_contains: Optional[str] = None
 
 
 EXTRACTION_EXPECTATIONS: dict[str, ExtractionExpectation] = {
@@ -215,6 +231,17 @@ EXTRACTION_EXPECTATIONS: dict[str, ExtractionExpectation] = {
         # a slot, so both "4 Aug" and "no date yet" are reasonable.
         key_date=date(2026, 8, 4),
         key_date_optional=True,
+    ),
+    "s11": ExtractionExpectation(
+        # The business unit matters as much as the employer here: Shopee runs
+        # FBS, Shopee Mall and SSL as separate operations that hire and
+        # interview separately, so a row or a brief scoped to "Shopee" would
+        # be accurate and useless.
+        company_any_of=("shopee",),
+        role_contains="operations",
+        status=ApplicationStatus.INTERVIEW,
+        key_date=date(2026, 8, 5),
+        department_contains="fbs",
     ),
     "s10": ExtractionExpectation(
         company_any_of=("gic",),

@@ -87,6 +87,13 @@ class ExtractedDetails(BaseModel):
     company: str = Field(
         description="Short trading name, e.g. 'Grab' not 'Grab Holdings Limited'."
     )
+    department: Optional[str] = Field(
+        default=None,
+        description=(
+            "Business unit or team within the company, if the email names one — "
+            "e.g. 'Fulfilled by Shopee (FBS)'. Null when the email names none."
+        ),
+    )
     role: str = Field(description="Role title as written, without the company name.")
     status: ApplicationStatus
     key_date: Optional[datetime] = Field(
@@ -100,6 +107,10 @@ class ExtractedDetails(BaseModel):
 
 class ResearchBrief(BaseModel):
     company: str
+    # The business unit the brief is about, kept separate from `company` so
+    # callers can match a brief to an application without parsing a display
+    # string. None means the brief covers the employer as a whole.
+    department: Optional[str] = None
     brief_text: str
     generated_at: datetime
     # Pages the model actually consulted, from Google Search grounding. A

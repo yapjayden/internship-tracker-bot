@@ -41,9 +41,20 @@ Limited". "GovTech", not "Government Technology Agency of Singapore". If the \
 email comes from an assessment platform such as HackerRank or Codility, the \
 company is the employer being hired for, never the platform.
 
-role — the job title as written, without the company name and without \
-programme boilerplate. "Software Engineer Intern", not "Shopee Software \
-Engineer Intern (Summer 2027)". If no title is stated, use "Unknown".
+department — the business unit or team inside the company, if the email names \
+one, otherwise null. Large employers run many of these and they hire, \
+interview and operate separately: Shopee has Fulfilled by Shopee (FBS), \
+Shopee Mall, Shopee Supported Logistics (SSL) and others. Treating two of \
+them as one application would merge unrelated processes. When the email uses \
+an abbreviation and the full name, give both as "Fulfilled by Shopee (FBS)", \
+so the same unit written either way can still be recognised. Do not invent a \
+department, and do not put a country or office here — a location is not a \
+business unit.
+
+role — the job title as written, without the company name, without the \
+department, and without programme boilerplate. "Software Engineer Intern", \
+not "Shopee Software Engineer Intern (Summer 2027)". If no title is stated, \
+use "Unknown".
 
 status — where the application now stands:
   applied         an acknowledgement, or a general update with nothing to do
