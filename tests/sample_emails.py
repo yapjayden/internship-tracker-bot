@@ -161,6 +161,33 @@ SAMPLES: list[tuple[Email, Category]] = [
         ),
         Category.INTERVIEW,
     ),
+    (
+        # From a real run: the router filed this as internship_other, the
+        # extractor turned it into "ByteDance / Unknown / action_needed", and
+        # it buzzed the phone. Signing in to a careers portal is not an
+        # application event.
+        _email(
+            "s12",
+            "no-reply@verify.bytedance.com",
+            "ByteDance verification code: 136148",
+            "Your verification code is 136148.\n\nThis code expires in 5 minutes. "
+            "If you did not request it, you can ignore this email.",
+        ),
+        Category.NOT_RELEVANT,
+    ),
+    (
+        # Also from a real run, and correctly rejected there — kept so it stays
+        # rejected. A feedback form about a finished programme is not a step in
+        # an application.
+        _email(
+            "s13",
+            "noreply@forms.nus.edu.sg",
+            "Thank you for submitting GRT Overseas Internship Feedback",
+            "Dear Jayden,\n\nWe have received your response to the GRT Overseas "
+            "Internship Feedback form. Thank you for taking the time to complete it.",
+        ),
+        Category.NOT_RELEVANT,
+    ),
 ]
 
 

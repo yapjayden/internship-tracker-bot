@@ -46,6 +46,18 @@ about an application this student actually submitted.
 Judge by what the email asks the reader to do, not by keywords it happens to \
 contain. A newsletter mentioning the word "interview" is not_relevant.
 
+Automated account and security mail is always not_relevant, even when the \
+employer sent it and even when the student is mid-application with them: \
+verification codes, one-time passcodes, password resets, login and new-device \
+alerts, account-created confirmations, and receipts. Signing in to a careers \
+portal is not an application event — nothing has happened to the application \
+— so tracking it adds a row with no content and interrupts the reader for \
+nothing. A code from ByteDance is a code, not an update on a ByteDance \
+application.
+
+A survey or feedback-form confirmation is not_relevant too. Completing a \
+questionnaire about a past programme is not a step in an application.
+
 Set confidence between 0 and 1, reflecting genuine uncertainty. Use a value \
 below 0.5 when the email is ambiguous or could plausibly fit two categories.\
 """
