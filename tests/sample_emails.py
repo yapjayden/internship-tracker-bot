@@ -193,6 +193,22 @@ SAMPLES: list[tuple[Email, Category]] = [
         ),
         Category.NOT_RELEVANT,
     ),
+    (
+        # Modelled on a Club Med acknowledgement the pipeline mishandled: the
+        # role appears only in the body, and the subject says nothing. It was
+        # missed because HTML bodies were passed downstream as raw markup, so
+        # the truncated prefix the model saw was <style> rather than prose.
+        _email(
+            "s14",
+            "recruitment@clubmed.com",
+            "We have received your application",
+            "Dear Jayden,\n\nThank you for applying for the Data Analyst Intern "
+            "position at Club Med Singapore.\n\nOur team will review your "
+            "application and will be in touch within 10 working days.\n\n"
+            "Club Med Talent Acquisition",
+        ),
+        Category.OTHER,
+    ),
 ]
 
 
@@ -263,6 +279,13 @@ EXTRACTION_EXPECTATIONS: dict[str, ExtractionExpectation] = {
         # a slot, so both "4 Aug" and "no date yet" are reasonable.
         key_date=date(2026, 8, 4),
         key_date_optional=True,
+    ),
+    "s14": ExtractionExpectation(
+        # The whole point: the subject names no role, so a correct answer
+        # proves the body was read.
+        company_any_of=("club med", "clubmed"),
+        role_contains="data analyst",
+        status=ApplicationStatus.APPLIED,
     ),
     "s11": ExtractionExpectation(
         # The business unit matters as much as the employer here: Shopee runs

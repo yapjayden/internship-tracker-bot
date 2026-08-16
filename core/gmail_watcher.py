@@ -24,6 +24,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
+from html.parser import HTMLParser
 
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
@@ -51,6 +52,10 @@ DEFAULT_MAX_MESSAGES = 25
 # Safety stop when listing message ids. Ids are cheap, but an unbounded loop
 # over a mailbox with a very old cursor would still stall a cron run.
 MAX_LIST_PAGES = 10
+
+# Below this, a text/plain part is probably a placeholder rather than the
+# message, and the HTML alternative is worth preferring despite its chrome.
+SUBSTANTIVE_PLAIN_CHARS = 200
 
 
 def _lookback() -> timedelta:
@@ -130,9 +135,75 @@ def _build_service(settings: Settings):
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Reduce an HTML email to the words a person would actually read.
+
+    Handing raw markup downstream looks like it works — there is text in
+    there — but the first few thousand characters of a marketing-templated
+    email are <head>, <style> and layout tables. Since the router and
+    extractor truncate the body, the visible content never reached the model,
+    and a role named only in the body was invisible.
+
+    Stdlib rather than a parser dependency: this needs to drop script and
+    style, turn block tags into newlines, and nothing more.
+    """
+
+    # Only tags that wrap content and always close. A void tag like <meta> or
+    # <link> has no closing tag, so counting it as the start of a skip region
+    # leaves the counter stuck above zero and swallows the entire email. They
+    # carry no text anyway, so there is nothing to skip.
+    SKIP = {"script", "style", "head", "title", "noscript"}
+    BREAK = {
+        "br", "p", "div", "tr", "li", "table", "section", "article",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skipping = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "body":
+            # Backstop for markup that never closes <head>. Without it one
+            # unclosed tag silently costs the whole message.
+            self._skipping = 0
+        elif tag in self.SKIP:
+            self._skipping += 1
+        elif tag in self.BREAK:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.SKIP:
+            self._skipping = max(0, self._skipping - 1)
+        elif tag in self.BREAK:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skipping:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        # Collapse the whitespace templated HTML is full of, so the character
+        # budget is spent on words rather than indentation.
+        lines = [" ".join(line.split()) for line in "".join(self._parts).splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def html_to_text(markup: str) -> str:
+    try:
+        parser = _HTMLTextExtractor()
+        parser.feed(markup)
+        parser.close()
+        return parser.text()
+    except Exception as exc:
+        # Malformed markup should cost the formatting, not the email.
+        logger.warning("HTML parse failed (%s); using raw markup", exc)
+        return markup
+
+
 def _decode_body(payload: dict) -> str:
-    """Pull plain text out of a Gmail payload, walking multipart bodies.
-    Prefers text/plain; falls back to text/html only if that's all there is."""
+    """Pull readable text out of a Gmail payload, walking multipart bodies."""
 
     def walk(part: dict) -> tuple[str | None, str | None]:
         mime = part.get("mimeType", "")
@@ -151,8 +222,23 @@ def _decode_body(payload: dict) -> str:
             html = html or sub_html
         return plain, html
 
-    plain, html = walk(payload)
-    return plain or html or ""
+    plain, markup = walk(payload)
+    plain = (plain or "").strip()
+    from_html = html_to_text(markup) if markup else ""
+
+    # Prefer the plain part when it has real content. It says the same thing
+    # as the HTML without the preheader, the "view in browser" line and the
+    # footer, so it spends less of the truncation budget on chrome.
+    #
+    # But a multipart/alternative often ships a stub instead — "This email
+    # requires an HTML viewer", or a bare unsubscribe line — and taking that
+    # would discard the entire message. Comparing lengths alone does not
+    # separate the two, since HTML's extra chrome makes it longer even when
+    # the plain part is perfectly good, so require the plain part to be
+    # substantive in its own right.
+    if plain and (len(plain) >= SUBSTANTIVE_PLAIN_CHARS or len(plain) >= len(from_html)):
+        return plain
+    return from_html or plain or ""
 
 
 def _to_email(message: dict) -> Email:
