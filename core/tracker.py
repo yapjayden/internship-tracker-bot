@@ -25,6 +25,7 @@ from core.config import Settings
 from core.models import (
     STATUS_RANK,
     TERMINAL_STATUSES,
+    Application,
     ApplicationStatus,
     Category,
     Email,
@@ -346,8 +347,48 @@ async def attach_research_brief(
             logger.warning("No tracker row matched company %r for research brief", company)
 
 
-async def query(settings: Settings, natural_language_question: str) -> str:
-    raise NotImplementedError("Stage 10: read tracker rows and answer NL queries")
+def _parse_datetime(raw: str) -> datetime | None:
+    """Sheets hands back whatever was written. Be forgiving: a row a human has
+    edited by hand should not break the read path for every other row."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        logger.debug("Unparseable date in tracker: %r", raw)
+        return None
+
+
+async def load_applications(settings: Settings) -> list[Application]:
+    """Every tracker row, parsed. The bot's read path."""
+    rows = await _load_rows(settings)
+
+    applications = []
+    for row in rows:
+        company = _cell(row, "company")
+        if not company:
+            # Blank separator rows are a normal thing to find in a spreadsheet
+            # someone actually looks at.
+            continue
+        try:
+            status = ApplicationStatus(_cell(row, "status").lower())
+        except ValueError:
+            status = ApplicationStatus.UNKNOWN
+        applications.append(
+            Application(
+                company=company,
+                department=_cell(row, "department") or None,
+                role=_cell(row, "role"),
+                category=_cell(row, "category"),
+                key_date=_parse_datetime(_cell(row, "key_date")),
+                status=status,
+                research_brief=_cell(row, "research_brief"),
+                source=_cell(row, "source"),
+                logged_at=_parse_datetime(_cell(row, "logged_at")),
+            )
+        )
+    return applications
 
 
 async def companies_with_briefs(settings: Settings) -> list[tuple[str, str]]:

@@ -105,6 +105,36 @@ class ExtractedDetails(BaseModel):
     )
 
 
+class Application(BaseModel):
+    """One tracker row, parsed back out of the sheet.
+
+    The write path builds rows from ExtractedDetails; this is the read path,
+    for the bot answering questions. Kept separate because a row carries
+    things extraction never produced — the brief, when it was logged — and
+    because everything in a spreadsheet arrives as a string.
+    """
+
+    company: str
+    department: Optional[str] = None
+    role: str = ""
+    category: str = ""
+    key_date: Optional[datetime] = None
+    status: ApplicationStatus = ApplicationStatus.UNKNOWN
+    research_brief: str = ""
+    source: str = ""
+    logged_at: Optional[datetime] = None
+
+    @property
+    def label(self) -> str:
+        """Company, unit and role as one line, skipping what is absent."""
+        parts = [self.company]
+        if self.department:
+            parts.append(self.department)
+        if self.role and self.role.lower() != "unknown":
+            parts.append(self.role)
+        return " — ".join(parts)
+
+
 class ResearchBrief(BaseModel):
     company: str
     # The business unit the brief is about, kept separate from `company` so

@@ -78,9 +78,17 @@ mail later.
 
 ## Status
 
-Stage 8 complete. The whole pipeline runs end to end: watch -> route ->
-extract -> research (parallel, interviews only) -> track -> notify. The bot's
-on-demand query side (`bot/app.py`) is the remaining stub.
+Stage 9 written, not yet deployed. The pipeline runs end to end on a
+schedule, and the bot's query commands are implemented and rendering
+correctly; what remains is somewhere to host the webhook.
+
+Commands: `/all` (grouped by what each application needs from you), `/next`
+(dated within 7 days), `/brief` and `/brief <company>`, `/find <company>`,
+`/stats`, `/stale` (acknowledged then silent), `/help`.
+
+`bot/commands.py` is pure — applications in, message strings out — so
+`scripts/test_bot.py --offline` renders every command with no credentials and
+no network. `bot/app.py` is the transport shell around it.
 
 Research fans out with `asyncio.gather`, one independent agent per company
 *and business unit*, filtered three ways so it stays cheap: interviews only,

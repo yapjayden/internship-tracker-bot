@@ -141,7 +141,7 @@ def _esc(text: str) -> str:
     return html.escape(text or "", quote=False)
 
 
-def _format_brief(text: str) -> str:
+def format_brief(text: str) -> str:
     """Bold the research agent's section labels, escaping everything else.
 
     The agent is asked to emit fixed labels on their own lines. Matching them
@@ -247,7 +247,7 @@ def build_message(
         # five characters — so budgeting against the raw length can still
         # overflow, and the blind cut that follows could land inside an entity
         # and make Telegram reject the whole message as malformed HTML.
-        brief = _truncate_escaped(_format_brief(research_brief.brief_text), available)
+        brief = _truncate_escaped(format_brief(research_brief.brief_text), available)
 
         lines += ["", "<b>Prep brief</b>", brief] + source_lines
 
