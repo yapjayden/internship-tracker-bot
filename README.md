@@ -13,7 +13,10 @@ prep brief alongside the notification.
 - `pipeline/run_once.py` — one full pass (watch -> route -> extract ->
   research -> track -> notify), run on a schedule via GitHub Actions.
 - `bot/app.py` — Telegram webhook service (on-demand queries), deployed to
-  Google Cloud Run.
+  Google Cloud Run by `scripts/deploy_bot.sh`. It carries neither Gmail
+  credentials nor a service-account key: it never opens a mailbox, and on
+  Cloud Run it runs *as* the service account, so Google mints its Sheets
+  tokens directly.
 
 Hosting is split this way so both halves stay on free tiers: the email
 pipeline only needs to wake up periodically (GitHub Actions cron), while the

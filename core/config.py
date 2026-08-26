@@ -67,11 +67,19 @@ def require_setting(value: str, env_name: str) -> str:
     return value
 
 
-def load_settings() -> Settings:
+def load_settings(require_gmail: bool = True) -> Settings:
+    """Load configuration.
+
+    require_gmail=False for the query bot, which reads the tracker and never
+    touches a mailbox. Deploying it would otherwise mean handing a public
+    web service a refresh token for the whole inbox, to satisfy a check for
+    credentials it never uses.
+    """
+    gmail = _require if require_gmail else get_env
     return Settings(
-        gmail_client_id=_require("GMAIL_CLIENT_ID"),
-        gmail_client_secret=_require("GMAIL_CLIENT_SECRET"),
-        gmail_refresh_token=_require("GMAIL_REFRESH_TOKEN"),
+        gmail_client_id=gmail("GMAIL_CLIENT_ID"),
+        gmail_client_secret=gmail("GMAIL_CLIENT_SECRET"),
+        gmail_refresh_token=gmail("GMAIL_REFRESH_TOKEN"),
         gemini_api_key=get_env("GEMINI_API_KEY"),
         telegram_bot_token=get_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=get_env("TELEGRAM_CHAT_ID"),

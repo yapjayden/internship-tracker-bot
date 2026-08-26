@@ -18,6 +18,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import google.auth
+import google.auth.exceptions
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -31,6 +33,20 @@ APPLICATIONS_TAB = "Applications"
 STATE_TAB = "State"
 
 _service: Any = None
+
+
+def _ambient_credentials():
+    """Credentials from the runtime itself, with no key material anywhere.
+
+    On Cloud Run the service runs *as* a service account, so the platform can
+    mint tokens for it directly. Shipping a downloaded key there would mean
+    putting a permanent credential into a public web service to obtain access
+    it already has — and a key in an environment variable is a credential that
+    can leak, be committed, or outlive its usefulness. A key file is still the
+    right answer locally, where there is no ambient identity to borrow.
+    """
+    credentials, _ = google.auth.default(scopes=SCOPES)
+    return credentials
 
 
 def _load_key(settings: Settings) -> dict:
@@ -87,7 +103,18 @@ def _build_service(settings: Settings) -> Any:
     if _service is not None:
         return _service
 
-    creds = Credentials.from_service_account_info(_load_key(settings), scopes=SCOPES)
+    if settings.google_service_account_file or settings.google_service_account_json:
+        creds = Credentials.from_service_account_info(_load_key(settings), scopes=SCOPES)
+    else:
+        try:
+            creds = _ambient_credentials()
+            logger.info("Using the runtime's own service account for Sheets")
+        except google.auth.exceptions.DefaultCredentialsError as exc:
+            raise RuntimeError(
+                "No Google credentials. Locally, set GOOGLE_SERVICE_ACCOUNT_FILE "
+                "to the downloaded key. On Cloud Run, deploy with "
+                "--service-account so the service has an identity of its own."
+            ) from exc
     _service = build("sheets", "v4", credentials=creds, cache_discovery=False)
     return _service
 

@@ -59,7 +59,7 @@ async def _answer(settings, text: str) -> None:
 
 
 async def main() -> None:
-    settings = load_settings()
+    settings = load_settings(require_gmail=False)
     token = settings.telegram_bot_token
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set.")

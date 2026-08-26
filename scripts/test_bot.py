@@ -177,7 +177,7 @@ def run_offline() -> int:
 
 
 async def run_live(send: bool) -> int:
-    settings = load_settings()
+    settings = load_settings(require_gmail=False)
     apps = await tracker.load_applications(settings)
     print(f"\n{len(apps)} application(s) in the tracker.\n")
     problems = _render(apps)

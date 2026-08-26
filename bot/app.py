@@ -77,7 +77,7 @@ async def telegram_webhook(request: Request, background: BackgroundTasks) -> Res
     if not chat_id or not text:
         return Response(status_code=200)
 
-    settings = load_settings()
+    settings = load_settings(require_gmail=False)
 
     # The bot's username is public, so anyone can message it. Without this
     # check a stranger could read where you are interviewing.
