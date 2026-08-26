@@ -23,7 +23,14 @@ from core import notifier, tracker
 from core.config import load_settings
 from core.models import Application, ApplicationStatus
 
-COMMANDS = ["/all", "/next", "/brief", "/brief shopee", "/find grab", "/stats", "/stale", "/help"]
+COMMANDS = [
+    "/all", "/next", "/brief", "/brief shopee", "/find grab",
+    "/stats", "/stale", "/help",
+]
+
+# /research does real work, so it is exercised separately against a stub
+# rather than run for every mode.
+RESEARCH_CASES = ["/research", "/research grab", "/research nowhere", "/research shopee"]
 
 BRIEF = """\
 WHAT THEY DO
@@ -98,10 +105,67 @@ def _render(apps: list[Application]) -> int:
     return problems
 
 
+def _render_research(apps: list[Application]) -> int:
+    """Exercise /research with the agent and the sheet stubbed out."""
+    import asyncio
+    from unittest import mock
+
+    from core import research_agent, tracker
+    from core.models import ResearchBrief
+
+    async def fake_research(settings, company, role, department=None):
+        return ResearchBrief(
+            company=company, department=department,
+            brief_text=BRIEF, generated_at=datetime.now(timezone.utc),
+            sources=["Example — https://example.com"],
+        )
+
+    saved: list[tuple] = []
+
+    async def fake_attach(settings, company, brief, department=None):
+        saved.append((company, department))
+
+    problems = 0
+    with mock.patch.object(research_agent, "research_company", fake_research), \
+         mock.patch.object(tracker, "attach_research_brief", fake_attach):
+        for command in RESEARCH_CASES:
+            replies = asyncio.run(commands.dispatch_async(None, apps, command))
+            print("=" * 68)
+            print(command)
+            print("=" * 68)
+            for reply in replies:
+                print(reply)
+            print()
+
+    # "shopee" matches two units, so it must ask rather than pick one and
+    # silently write the wrong team's brief.
+    ambiguous = asyncio.run(commands.dispatch_async(None, apps, "/research shopee"))
+    if "more than one" not in ambiguous[0]:
+        print("  FAIL: ambiguous company should have asked which unit")
+        problems += 1
+    # A company with no unit saving None is correct. What must not happen is a
+    # unit-bearing application losing its unit on the way to the sheet, which
+    # would write FBS's brief onto every Shopee row.
+    saved.clear()
+    with mock.patch.object(research_agent, "research_company", fake_research), \
+         mock.patch.object(tracker, "attach_research_brief", fake_attach):
+        asyncio.run(commands.dispatch_async(None, apps, "/research fulfilled"))
+    if not saved:
+        print("  FAIL: /research fulfilled matched nothing")
+        problems += 1
+    elif saved[0][1] is None:
+        print("  FAIL: the business unit was dropped before saving")
+        problems += 1
+    else:
+        print(f"  unit carried through to the sheet: {saved[0][1]!r}")
+    return problems
+
+
 def run_offline() -> int:
     apps = _fixtures()
     print(f"\n{len(apps)} fabricated application(s).\n")
     problems = _render(apps)
+    problems += _render_research(apps)
 
     groups = {commands.group_of(a) for a in apps}
     print(f"  groups exercised: {len(groups)}/{len(commands.GROUP_ORDER)}")

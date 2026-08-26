@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import FastAPI, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from bot import commands
 from core import notifier, tracker
@@ -42,8 +42,28 @@ def _authorised(request: Request) -> bool:
     return request.headers.get(SECRET_HEADER, "") == expected
 
 
+async def _handle(settings, text: str) -> None:
+    """Do the work and send the replies, off the webhook's critical path."""
+    try:
+        applications = await tracker.load_applications(settings)
+    except Exception as exc:
+        logger.exception("Failed to read tracker")
+        await notifier.send_message(settings, f"Could not read the tracker: {exc}")
+        return
+
+    try:
+        replies = await commands.dispatch_async(settings, applications, text)
+    except Exception as exc:
+        logger.exception("Command failed")
+        await notifier.send_message(settings, f"That command failed: {exc}")
+        return
+
+    for reply in replies:
+        await notifier.send_message(settings, reply)
+
+
 @app.post("/telegram-webhook")
-async def telegram_webhook(request: Request) -> Response:
+async def telegram_webhook(request: Request, background: BackgroundTasks) -> Response:
     if not _authorised(request):
         return Response(status_code=403)
 
@@ -65,16 +85,11 @@ async def telegram_webhook(request: Request) -> Response:
         logger.warning("Ignoring message from unknown chat %s", chat_id)
         return Response(status_code=200)
 
-    try:
-        applications = await tracker.load_applications(settings)
-    except Exception as exc:
-        logger.exception("Failed to read tracker")
-        await notifier.send_message(settings, f"Could not read the tracker: {exc}")
-        return Response(status_code=200)
-
-    for reply in commands.dispatch(applications, text):
-        await notifier.send_message(settings, reply)
-
+    # Acknowledge immediately and work in the background. /research runs three
+    # searches and a model call, which is well past the point where Telegram
+    # gives up waiting and redelivers the same update — producing duplicate
+    # work and duplicate replies.
+    background.add_task(_handle, settings, text)
     return Response(status_code=200)
 
 

@@ -317,21 +317,29 @@ async def upsert_row(
 
 
 async def attach_research_brief(
-    settings: Settings, company: str, brief: ResearchBrief
+    settings: Settings, company: str, brief: ResearchBrief,
+    department: str | None = None,
 ) -> None:
-    """Write a prep brief onto every row for a company.
+    """Write a prep brief onto the rows it applies to.
 
-    Matching on company alone is intentional: the brief is about the employer,
-    not the specific role, so it is useful on all of that company's rows.
+    Scoped to the business unit when one is given. A brief on Fulfilled by
+    Shopee is not a brief on Shopee Mall, so writing it to every Shopee row
+    would hand one team's briefing to another. With no unit, it lands on all
+    of that employer's rows, which is right for a company-wide brief.
     """
     async with _write_lock:
         rows = await _load_rows(settings)
         brief_col = chr(ord("A") + COL["research_brief"])
-        target = set(_tokens(company, COMPANY_NOISE))
+        target = company_key(company)
 
         written = 0
         for offset, row in enumerate(rows):
-            if set(_tokens(_cell(row, "company"), COMPANY_NOISE)) != target:
+            row_company = _cell(row, "company")
+            if company_key(row_company) != target:
+                continue
+            if not same_department(
+                row_company, _cell(row, "department"), company, department
+            ):
                 continue
             sheet_row = offset + 2
             await sheets.update_values(

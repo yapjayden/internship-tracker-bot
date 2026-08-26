@@ -83,8 +83,15 @@ schedule, and the bot's query commands are implemented and rendering
 correctly; what remains is somewhere to host the webhook.
 
 Commands: `/all` (grouped by what each application needs from you), `/next`
-(dated within 7 days), `/brief` and `/brief <company>`, `/find <company>`,
-`/stats`, `/stale` (acknowledged then silent), `/help`.
+(dated within 7 days), `/brief` and `/brief <company>`, `/research <company>`
+(write a brief on demand), `/find <company>`, `/stats`, `/stale` (acknowledged
+then silent), `/help`.
+
+`/all`'s groups are derived rather than raw status. Applications sit in
+"Applied — no reply yet" from their confirmation email, and move to
+"Upcoming interviews", "Assessments to do" or "Awaiting outcome" on their own
+as later mail arrives — status only ever advances, so a stray acknowledgement
+after an invitation cannot pull one backwards.
 
 `bot/commands.py` is pure — applications in, message strings out — so
 `scripts/test_bot.py --offline` renders every command with no credentials and

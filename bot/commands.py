@@ -13,12 +13,15 @@ instead of guillotining a row in half.
 from __future__ import annotations
 
 import html
+import logging
 from datetime import datetime, timedelta, timezone
 
 from core.models import Application, ApplicationStatus
 from core.notifier import MAX_MESSAGE_CHARS, format_brief, format_key_date
 
 # Left over for the HTML tags the renderers add after budgeting.
+logger = logging.getLogger(__name__)
+
 CHUNK_BUDGET = MAX_MESSAGE_CHARS - 200
 
 UPCOMING_WINDOW = timedelta(days=7)
@@ -57,9 +60,14 @@ def group_of(app: Application) -> str:
     if app.status == ApplicationStatus.ASSESSMENT:
         return "📝 Assessments to do" if _is_future(app.key_date) else "⏳ Awaiting outcome"
     if app.status == ApplicationStatus.APPLIED:
-        return "📮 Awaiting response"
+        return APPLIED_GROUP
     return "❓ Unclear"
 
+
+# Named for where the rows come from — an application confirmation email —
+# rather than just "awaiting response", so it is obvious what populates it and
+# why an application you never got a reply to is absent.
+APPLIED_GROUP = "📮 Applied — no reply yet"
 
 # Ordered by urgency: things with a deadline first, dead applications last.
 GROUP_ORDER = [
@@ -68,7 +76,7 @@ GROUP_ORDER = [
     "🎯 Upcoming interviews",
     "⏳ Awaiting outcome",
     "🎉 Offers",
-    "📮 Awaiting response",
+    APPLIED_GROUP,
     "❓ Unclear",
     "💀 Rejected",
 ]
@@ -272,6 +280,61 @@ def cmd_stale(apps: list[Application], days: int = 21) -> list[str]:
     return _chunk(lines)
 
 
+async def cmd_research(
+    settings, apps: list[Application], query: str
+) -> list[str]:
+    """Research a company on demand and store the brief.
+
+    The pipeline only writes a brief when an interview *email* arrives. An
+    interview arranged by phone, LinkedIn or a careers portal never triggers
+    one, and neither does a research call that failed. This is the way back in.
+    """
+    # Imported here rather than at module scope so the pure read-only commands
+    # stay importable without the research and Sheets dependencies.
+    from core import research_agent, tracker
+
+    if not query:
+        return ["Send <code>/research &lt;company&gt;</code>, e.g. <code>/research Grab</code>."]
+
+    hits = [app for app in apps if _matches(app, query)]
+    if not hits:
+        return [
+            f"Nothing tracked matching {_esc(query)!r}.\n\n"
+            "Research writes onto an existing row, so the application has to "
+            "be in the tracker first. Try /all."
+        ]
+    if len({tracker.department_key(a.company, a.department) for a in hits}) > 1:
+        lines = [f"{_esc(query)!r} matches more than one:", ""]
+        lines += [f"• {_esc(app.label)}" for app in hits]
+        lines += ["", "Name the business unit too."]
+        return _chunk(lines)
+
+    target = hits[0]
+    try:
+        brief = await research_agent.research_company(
+            settings, target.company, target.role, target.department
+        )
+    except Exception as exc:
+        return [f"Research failed for {_esc(target.label)}: {_esc(str(exc)[:200])}"]
+
+    try:
+        await tracker.attach_research_brief(
+            settings, target.company, brief, target.department
+        )
+    except Exception as exc:
+        # The brief is worth reading even if it did not persist; say so rather
+        # than pretend it is saved.
+        logger.warning("Could not save brief for %s: %s", target.company, exc)
+        return _chunk(
+            [f"<b>{_esc(target.label)}</b>  (not saved to the sheet)", "",
+             format_brief(brief.brief_text)]
+        )
+
+    return _chunk(
+        [f"<b>{_esc(target.label)}</b>", "", format_brief(brief.brief_text)]
+    )
+
+
 HELP = """\
 <b>Internship tracker</b>
 
@@ -279,6 +342,7 @@ HELP = """\
 /next — anything dated in the next 7 days
 /brief — list available prep briefs
 /brief &lt;company&gt; — read one
+/research &lt;company&gt; — write a brief now, for an interview the email never announced
 /find &lt;company&gt; — everything tracked for one employer
 /stats — counts, and how many employers actually replied
 /stale — acknowledged, then silent for 21+ days
@@ -289,17 +353,34 @@ in between.\
 """
 
 
-def dispatch(apps: list[Application], text: str) -> list[str]:
-    """Route a raw message to a command. Unknown input gets help, not silence."""
+def parse(text: str) -> tuple[str, str]:
+    """Split a raw message into command and argument."""
     text = (text or "").strip()
     if not text.startswith("/"):
-        return [HELP]
-
+        return "", ""
     # Telegram appends @botname when a command is used in a group.
     command, _, argument = text.partition(" ")
-    command = command.split("@", 1)[0].lower()
-    argument = argument.strip()
+    return command.split("@", 1)[0].lower(), argument.strip()
 
+
+async def dispatch_async(settings, apps: list[Application], text: str) -> list[str]:
+    """Entry point for the webhook. Handles the commands that need to do work
+    before answering, and hands everything else to the pure dispatcher."""
+    command, argument = parse(text)
+    if command == "/research":
+        return await cmd_research(settings, apps, argument)
+    return dispatch(apps, text)
+
+
+def dispatch(apps: list[Application], text: str) -> list[str]:
+    """Route a raw message to a command. Unknown input gets help, not silence."""
+    command, argument = parse(text)
+    if not command:
+        return [HELP]
+
+    if command == "/research":
+        # Reached only if something called the sync dispatcher directly.
+        return ["/research needs the live service; it cannot run offline."]
     if command == "/all":
         return cmd_all(apps)
     if command == "/next":
