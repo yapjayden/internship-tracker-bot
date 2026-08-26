@@ -97,6 +97,13 @@ after an invitation cannot pull one backwards.
 `scripts/test_bot.py --offline` renders every command with no credentials and
 no network. `bot/app.py` is the transport shell around it.
 
+Two ways to run the query side. `bot/app.py` is a webhook and needs a public
+URL, so it needs a host. `scripts/run_bot.py` polls instead, from your own
+machine, needing nothing reachable from the internet — but it only answers
+while it is running. Both dispatch through the same commands, so whatever you
+verify with one holds for the other. Notifications are unaffected either way;
+they come from the scheduled pipeline, not from this process.
+
 Research fans out with `asyncio.gather`, one independent agent per company
 *and business unit*, filtered three ways so it stays cheap: interviews only,
 one brief per unit however many emails mention it, and nothing already briefed
