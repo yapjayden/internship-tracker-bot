@@ -94,4 +94,6 @@ curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
 
 echo
 echo "Done. Send /help to the bot."
-echo "Logs: gcloud run services logs tail $SERVICE --region $REGION"
+echo "Logs:"
+echo "  gcloud run services logs read $SERVICE --region $REGION --limit 50"
+echo "  gcloud beta run services logs tail $SERVICE --region $REGION   # streaming"
