@@ -91,19 +91,26 @@ echo
 
 gcloud services enable cloudscheduler.googleapis.com --quiet
 
-# GitHub rejects API calls with no User-Agent, so set one explicitly rather
-# than relying on what Cloud Scheduler happens to send.
+# No User-Agent here, though GitHub requires one: Cloud Scheduler always sends
+# its own and overrides anything set here, so a value of ours would read like
+# it mattered while having no effect.
 HEADERS="Accept=application/vnd.github+json"
 HEADERS="$HEADERS,Authorization=Bearer $TOKEN"
 HEADERS="$HEADERS,X-GitHub-Api-Version=2022-11-28"
-HEADERS="$HEADERS,User-Agent=cloud-scheduler-internship-tracker"
 
-# create fails if the job exists; update fails if it does not. Try update
-# first so re-running this after a token rotation just works.
+# create fails if the job exists; update fails if it does not. Pick by what is
+# already there, so re-running this after a token rotation just works.
+#
+# The two subcommands disagree on one flag name: create takes --headers, while
+# update takes --update-headers (its --headers is a different, create-only
+# spelling and is rejected outright). Getting that wrong breaks precisely the
+# re-run that a leaked token depends on.
 if gcloud scheduler jobs describe "$JOB" --location "$REGION" >/dev/null 2>&1; then
   ACTION=update
+  HEADER_FLAG=--update-headers
 else
   ACTION=create
+  HEADER_FLAG=--headers
 fi
 
 # --format=none, and stdout to /dev/null, because gcloud echoes the created
@@ -117,7 +124,7 @@ gcloud scheduler jobs "$ACTION" http "$JOB" \
   --time-zone "UTC" \
   --uri "$URI" \
   --http-method POST \
-  --headers "$HEADERS" \
+  "$HEADER_FLAG" "$HEADERS" \
   --message-body "{\"ref\":\"$BRANCH\"}" \
   --attempt-deadline 30s \
   --format=none >/dev/null
