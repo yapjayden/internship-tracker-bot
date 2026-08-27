@@ -106,6 +106,11 @@ else
   ACTION=create
 fi
 
+# --format=none, and stdout to /dev/null, because gcloud echoes the created
+# job back in full — including the Authorization header. Printing that puts a
+# live credential into terminal scrollback, CI logs, and any screenshot or
+# paste of a failed run. Errors still reach stderr, so a real failure is not
+# hidden by this.
 gcloud scheduler jobs "$ACTION" http "$JOB" \
   --location "$REGION" \
   --schedule "$SCHEDULE" \
@@ -114,11 +119,12 @@ gcloud scheduler jobs "$ACTION" http "$JOB" \
   --http-method POST \
   --headers "$HEADERS" \
   --message-body "{\"ref\":\"$BRANCH\"}" \
-  --attempt-deadline 30s
+  --attempt-deadline 30s \
+  --format=none >/dev/null
 
 echo
 echo "Job ${ACTION}d. Firing once now to check the token and the target..."
-gcloud scheduler jobs run "$JOB" --location "$REGION"
+gcloud scheduler jobs run "$JOB" --location "$REGION" --format=none >/dev/null
 
 echo
 echo "A 204 from GitHub means it worked; the run appears within seconds at"
@@ -127,4 +133,6 @@ echo
 echo "Last result (give it a moment, then re-run this line if it says nothing):"
 echo "  gcloud scheduler jobs describe $JOB --location $REGION --format 'value(status)'"
 echo
-echo "To stop it:  gcloud scheduler jobs pause $JOB --location $REGION"
+# --format=none on pause for the same reason as above: it echoes the job back,
+# Authorization header and all.
+echo "To stop it:  gcloud scheduler jobs pause $JOB --location $REGION --format=none"
