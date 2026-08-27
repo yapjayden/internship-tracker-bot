@@ -67,6 +67,23 @@ MATCH_CASES = [
      True, "extractor could not read a title"),
 ]
 
+# (existing_role, incoming_role, expected, why)
+#
+# The same emails that _same_application lets in on a company-only match are
+# the ones with no title to contribute, so the two rules have to agree: what
+# matches loosely must not then overwrite what it matched.
+ROLE_CASES = [
+    ("GenAI Business Analyst Intern", "Unknown", "GenAI Business Analyst Intern",
+     "a calendar invite names a time, not a job"),
+    ("Software Engineer Intern", "Intern", "Software Engineer Intern",
+     "an all-noise title is not an update"),
+    ("Unknown", "Data Engineering Intern", "Data Engineering Intern",
+     "a real title replaces a placeholder"),
+    ("Data Engineering Intern", "Investment Analyst Intern", "Investment Analyst Intern",
+     "a genuinely different title still wins"),
+    ("", "Unknown", "Unknown", "nothing to preserve on a fresh row"),
+]
+
 # (existing_status, incoming_status, expected, why)
 STATUS_CASES = [
     ("applied", ApplicationStatus.INTERVIEW, ApplicationStatus.INTERVIEW, "forward"),
@@ -92,6 +109,23 @@ def run_offline() -> int:
         failures += not ok
         print(f"  {'ok  ' if ok else 'FAIL'}  {ca!r}/{ra!r} vs {cb!r}/{rb!r}")
         print(f"        {'match' if got else 'separate'} — {why}")
+
+    print("\nRole preservation:\n")
+    for existing_role, incoming_role, expected, why in ROLE_CASES:
+        existing = [""] * len(tracker.TRACKER_COLUMNS)
+        existing[tracker.COL["company"]] = "Acme"
+        existing[tracker.COL["role"]] = existing_role
+        built = tracker._build_row(
+            Category.INTERVIEW,
+            _details("Acme", incoming_role, ApplicationStatus.INTERVIEW),
+            _email("role-case"),
+            existing=existing,
+        )
+        got = built[tracker.COL["role"]]
+        ok = got == expected
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  {existing_role or '(empty)'!r} + "
+              f"{incoming_role!r} -> {got!r}  ({why})")
 
     print("\nStatus progression:\n")
     for current, incoming, expected, why in STATUS_CASES:

@@ -236,7 +236,18 @@ def _build_row(
     row[COL["department"]] = extracted.department or (
         _cell(existing, "department") if existing else ""
     )
-    row[COL["role"]] = extracted.role
+    # Keep a title we already knew if this email states none. _same_application
+    # treats "Unknown" as noise so a title-less email joins its application
+    # instead of opening a duplicate row — which means the emails that match
+    # this way are exactly the ones carrying nothing worth writing. An
+    # interview thread is mostly those: the confirmation and the calendar
+    # invite name a time, not a job.
+    prior_role = _cell(existing, "role") if existing else ""
+    row[COL["role"]] = (
+        extracted.role
+        if _tokens(extracted.role, ROLE_NOISE) or not prior_role
+        else prior_role
+    )
     row[COL["category"]] = category.value
     row[COL["key_date"]] = key_date
     row[COL["status"]] = status.value
