@@ -159,12 +159,31 @@ The tracker's one-row-per-application design depends on company-name
 matching. `scripts/test_tracker.py --offline` covers the cases we thought of;
 real mail will find others. A wrongly merged row is the failure to watch for.
 
-The pipeline runs live on a GitHub Actions cron, every 15 minutes. GitHub
-treats scheduled runs as best-effort and delays them under load, so treat that
-as approximate; nothing depends on the interval, since the cursor lives in the
-sheet and a late run simply picks up more. Two operational notes: GitHub
-disables scheduled workflows after 60 days of repository inactivity, and a
-failing run emails you, which is the only signal the tracker has stopped.
+The pipeline runs live on GitHub Actions, triggered every 15 minutes by Cloud
+Scheduler (`scripts/setup_scheduler.sh`). The workflow's own `schedule:` is
+kept as a backstop but is not the clock, because it does not keep time.
+Measured over 32 hours it produced 30 of the 128 runs it asks for, at a median
+gap of 46 minutes and a worst gap of five hours, then stopped for ten hours —
+long enough to sit on an interview invitation for a whole afternoon. It does
+not fire on the requested minute either, so the usual advice about moving off
+the top of the hour does not apply: GitHub dispatches scheduled events
+best-effort, and a slot delayed past the next one is skipped rather than
+queued, which is how `*/15` decays to roughly hourly. `workflow_dispatch` has
+no such problem — it starts a run in about four seconds — so only the trigger
+moved. Compute stays on Actions, free and unlimited for a public repo, and
+Cloud Scheduler's first three jobs are free.
+
+Nothing is lost to a late run in any case: the cursor lives in the sheet and
+only advances after a clean pass, so a run that fires late reads everything
+since the last one. The cost of a missed slot is latency, not data.
+
+Three operational notes. GitHub disables scheduled workflows after 60 days of
+repository inactivity, which affects the backstop only. The dispatch token
+expires on whatever date you set, and when it does the cadence silently drops
+back to GitHub's unreliable schedule. And the tracker's only failure signal is
+a run that fails: a run that never happens sends nothing at all, which is
+exactly how the ten-hour gap went unnoticed until an expected notification
+did not arrive.
 
 Gmail push notifications (Pub/Sub -> Cloud Run) would replace the cron with
 seconds-latency delivery, but require a billing account; see the hosting note

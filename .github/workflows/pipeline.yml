@@ -3,11 +3,20 @@ name: Email pipeline
 on:
   workflow_dispatch: {}
   schedule:
-    # Every 15 minutes. GitHub treats scheduled runs as best-effort and delays
-    # them under load, sometimes by 10+ minutes, so treat this as "roughly
-    # every quarter hour" rather than a guarantee. Nothing downstream depends
-    # on the interval: the cursor lives in the sheet, so a late or skipped run
-    # picks up everything since the last one.
+    # A backstop, not the clock. Cloud Scheduler drives the real cadence by
+    # calling workflow_dispatch above (scripts/setup_scheduler.sh), because
+    # this schedule does not keep time: measured over 32 hours it delivered 30
+    # runs of the 128 it asks for, at a median gap of 46 minutes, and once
+    # went ten hours without firing. It does not even start on the requested
+    # minute. GitHub dispatches scheduled events best-effort and skips a slot
+    # rather than queuing it when the previous one ran late, which is how
+    # */15 degrades to roughly hourly.
+    #
+    # Left enabled anyway: it costs nothing on a public repo and it is what
+    # still runs if the scheduler job or its token dies. Nothing downstream
+    # depends on the interval — the cursor lives in the sheet, so a late run
+    # picks up everything since the last one — and the concurrency group below
+    # keeps a doubled-up run from overlapping the scheduler's.
     - cron: "*/15 * * * *"
 
 # One run at a time. Two overlapping runs would both read the same cursor,
