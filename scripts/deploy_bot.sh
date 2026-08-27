@@ -26,7 +26,13 @@ if [[ ! -f .env ]]; then
 fi
 
 # Pull values from .env without exporting the whole file into this shell.
-value_of() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//'; }
+#
+# The trailing `|| true` matters. grep exits 1 when a key is absent, pipefail
+# carries that out of the pipeline, and `VAR="$(value_of X)"` takes the
+# substitution's status as its own — so under `set -e` one missing optional key
+# aborts the whole deploy before it prints a single line. Absent must read as
+# empty here; the required ones are checked explicitly just below.
+value_of() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed 's/^["'"'"']//;s/["'"'"']$//' || true; }
 
 BOT_TOKEN="$(value_of TELEGRAM_BOT_TOKEN)"
 CHAT_ID="$(value_of TELEGRAM_CHAT_ID)"
@@ -61,7 +67,14 @@ if [[ -z "${SHEETS_SA:-}" ]]; then
   SHEETS_SA="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['client_email'])" "$KEY_FILE")"
 fi
 
-PROJECT="$(gcloud config get-value project 2>/dev/null)"
+# Same trap as value_of: stderr is suppressed here, so without the guard a
+# gcloud that is not logged in would also exit silently.
+PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+if [[ -z "$PROJECT" || "$PROJECT" == "(unset)" ]]; then
+  echo "No gcloud project is set. Run: gcloud config set project <project-id>" >&2
+  exit 1
+fi
+
 echo
 echo "Project:  $PROJECT"
 echo "Service:  $SERVICE  ($REGION)"
